@@ -6,7 +6,7 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/heyandras/gwt/tui"
+	"github.com/coollabsio/gcool/tui"
 )
 
 const version = "0.1.0"
@@ -134,6 +134,6 @@ EXAMPLES:
     # Run for a specific repository
     gcool -path /path/to/repo
 
-For more information, visit: https://github.com/heyandras/gcool
+For more information, visit: https://github.com/coollabsio/gcool
 `, version)
 }

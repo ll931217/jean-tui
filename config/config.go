@@ -14,7 +14,9 @@ type Config struct {
 
 // RepoConfig represents configuration for a specific repository
 type RepoConfig struct {
-	BaseBranch string `json:"base_branch"`
+	BaseBranch         string `json:"base_branch"`
+	LastSelectedBranch string `json:"last_selected_branch,omitempty"`
+	Editor             string `json:"editor,omitempty"`
 }
 
 // Manager handles configuration loading and saving
@@ -103,4 +105,50 @@ func (m *Manager) GetRepoConfig(repoPath string) *RepoConfig {
 		return repo
 	}
 	return &RepoConfig{}
+}
+
+// GetLastSelectedBranch returns the last selected branch for a repository
+func (m *Manager) GetLastSelectedBranch(repoPath string) string {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		return repo.LastSelectedBranch
+	}
+	return ""
+}
+
+// SetLastSelectedBranch sets the last selected branch for a repository
+func (m *Manager) SetLastSelectedBranch(repoPath, branch string) error {
+	if m.config.Repositories == nil {
+		m.config.Repositories = make(map[string]*RepoConfig)
+	}
+
+	if _, ok := m.config.Repositories[repoPath]; !ok {
+		m.config.Repositories[repoPath] = &RepoConfig{}
+	}
+
+	m.config.Repositories[repoPath].LastSelectedBranch = branch
+	return m.save()
+}
+
+// GetEditor returns the preferred editor for a repository
+func (m *Manager) GetEditor(repoPath string) string {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		if repo.Editor != "" {
+			return repo.Editor
+		}
+	}
+	return "code" // Default to VS Code
+}
+
+// SetEditor sets the preferred editor for a repository
+func (m *Manager) SetEditor(repoPath, editor string) error {
+	if m.config.Repositories == nil {
+		m.config.Repositories = make(map[string]*RepoConfig)
+	}
+
+	if _, ok := m.config.Repositories[repoPath]; !ok {
+		m.config.Repositories[repoPath] = &RepoConfig{}
+	}
+
+	m.config.Repositories[repoPath].Editor = editor
+	return m.save()
 }

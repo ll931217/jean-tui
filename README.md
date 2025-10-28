@@ -21,13 +21,13 @@ A beautiful terminal user interface for managing Git worktrees, built with [Bubb
 ### Using Go Install
 
 ```bash
-go install github.com/heyandras/gcool@latest
+go install github.com/coollabsio/gcool@latest
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/heyandras/gcool
+git clone https://github.com/coollabsio/gcool
 cd gcool
 go build -o gcool
 sudo mv gcool /usr/local/bin/
@@ -95,29 +95,44 @@ gcool -path /path/to/other/repo
 
 ## Keybindings
 
-### Navigation
-- `↑` / `k` - Move up
-- `↓` / `j` - Move down
-- `Enter` / `Space` - Switch to selected worktree
+### Main View - Navigation
+- `↑` / `k` - Move cursor up in worktree list
+- `↓` / `j` - Move cursor down in worktree list
+- `Enter` / `Space` - Switch to selected worktree (with Claude)
+- `t` - Open terminal in worktree (without Claude)
 
-### Actions
-- `n` - Create new worktree with a **new branch**
+### Main View - Worktree Management
+- `n` - Create new worktree with a **new branch** (random name pre-filled)
 - `a` - Create worktree from an **existing branch**
 - `d` / `x` - Delete selected worktree
-- `s` - Show active tmux sessions
 - `r` - Refresh worktree list
-- `q` / `Ctrl+C` - Quit
 
-### Modal Navigation
-- `Tab` - Cycle through inputs and buttons
+### Main View - Branch Operations
+- `R` (Shift+R) - Rename current branch
+- `C` (Shift+C) - Checkout/switch branch in main repository
+- `c` - Change base branch for new worktrees
+
+### Main View - Application
+- `s` - Open settings menu
+- `S` (Shift+S) - View/manage tmux sessions
+- `o` - Open worktree in configured editor
+- `q` / `Ctrl+C` - Quit application
+
+### Modal Navigation (All Modals)
+- `Tab` - Cycle through inputs/buttons
 - `Enter` - Confirm action
 - `Esc` - Cancel/close modal
 
-### Session List (Press `s`)
-- `↑` / `↓` / `j` / `k` - Navigate sessions
+### Session List Modal (Press `s`)
+- `↑` / `↓` / `j` / `k` - Navigate through sessions
 - `Enter` - Attach to selected session
-- `x` / `d` - Kill selected session
+- `k` - Kill selected session
 - `Esc` / `q` - Close modal
+
+### Branch Selection Modals (Press `a`, `C`, or `c`)
+- `↑` / `↓` - Navigate through branch list
+- `Enter` - Select branch
+- `Esc` - Cancel
 
 ## How It Works
 
@@ -229,43 +244,187 @@ gcool --no-claude
 
 ### Prerequisites
 
-- Go 1.21 or later
-- Git
+- **Go 1.21+**: For building and development
+- **Git**: Required for all worktree operations
+- **tmux**: Required for session management
 
-### Running Locally
+### Development Commands
 
 ```bash
+# Run locally
 go run main.go
-```
 
-### Testing on Another Repo
-
-```bash
+# Run with custom repository path (for testing)
 go run main.go -path /path/to/test/repo
-```
 
-### Building
-
-```bash
+# Build binary
 go build -o gcool
+
+# Install to system
+sudo cp gcool /usr/local/bin/
+
+# Initialize/update dependencies
+go mod tidy
+
+# Verify the build
+go build -o gcool
+
+# Test with different flags
+./gcool --version
+./gcool --help
+./gcool --no-claude
 ```
+
+### Project Structure
+
+For detailed codebase documentation, architecture patterns, and development guidelines, see [CLAUDE.md](./CLAUDE.md).
+
+Key areas documented in CLAUDE.md:
+- Complete keybinding reference with implementation locations
+- Adding new features (keybindings, git operations, modals)
+- Message flow and async operation patterns
+- File structure with line number references
+- Extension points and future enhancements
+
+### Adding New Features
+
+See [CLAUDE.md](./CLAUDE.md) for detailed guides on:
+- **Adding a new keybinding**: Step-by-step with code examples
+- **Adding a new git operation**: Pattern for extending git functionality
+- **Adding a new modal**: Pattern for creating modal dialogs
+- **Message flow pattern**: Understanding async operations
+
+## Configuration
+
+### Settings Menu
+
+Press `s` to open the settings menu, where you can configure:
+
+1. **Editor** - Default editor for opening worktrees
+   - Press `Enter` on this option to select from available editors
+   - Editors: code, cursor, nvim, vim, subl, atom, zed
+   - Default: VS Code (`code`)
+
+2. **Base Branch** - Base branch for creating new worktrees
+   - Press `Enter` to select from available branches
+   - Used when creating new branches with `n` key
+
+All settings are saved per-repository in `~/.config/gcool/config.json`:
+
+```json
+{
+  "repositories": {
+    "/path/to/repo": {
+      "base_branch": "main",
+      "editor": "code"
+    }
+  }
+}
+```
+
+### Tmux Configuration
+
+gcool uses a custom tmux configuration that enhances the default experience without modifying your `~/.tmux.conf`.
+
+**Configuration file**: `~/.config/gcool/tmux.conf`
+
+This config:
+- **Sources your `~/.tmux.conf` first** - Your personal settings are preserved
+- **Adds gcool-specific enhancements**:
+  - Mouse scrolling enabled
+  - 10,000 line scrollback buffer
+  - 256 color support
+  - Better status bar with gcool branding
+  - Nice pane border colors
+
+**Customizing**:
+You can edit `~/.config/gcool/tmux.conf` to customize gcool's tmux behavior. Changes will apply to new sessions.
+
+**Key features**:
+- Mouse wheel scrolling works like a normal terminal
+- Click to select panes
+- Drag to resize panes
+- `Prefix + r` to reload gcool tmux config
+
+### Base Branch
+
+The base branch is used when creating new worktrees with new branches. gcool automatically determines the base branch:
+
+1. Check saved config for repository
+2. Fall back to current branch
+3. Fall back to default branch (main/master)
+4. Fall back to empty string (user must set manually with `c` key)
+
+You can change the base branch at any time by pressing `c` in the main view.
+
+### Editor Integration
+
+gcool includes a built-in editor selection menu for opening worktrees in your IDE.
+
+**Setting your preferred editor:**
+1. Press `e` in the main view to open the editor selection modal
+2. Use `↑`/`↓` or `j`/`k` to navigate through available editors
+3. Press `Enter` to select and save your preference
+
+**Available editors:**
+- `code` - VS Code (default)
+- `cursor` - Cursor IDE
+- `nvim` - Neovim
+- `vim` - Vim
+- `subl` - Sublime Text
+- `atom` - Atom
+- `zed` - Zed
+
+**Opening a worktree:**
+- Press `o` on any worktree to open it in your configured editor
+- The editor preference is saved per repository in `~/.config/gcool/config.json`
 
 ## Architecture
 
+### Directory Structure
+
 ```
 gcool/
-├── main.go           # CLI entry point
-├── git/              # Git operations wrapper
-│   └── worktree.go
-├── tui/              # Bubble Tea TUI
-│   ├── model.go      # State and data structures
-│   ├── update.go     # Event handling and state updates
-│   ├── view.go       # UI rendering
-│   └── styles.go     # Lipgloss styling
-└── shell/            # Shell integration wrappers
-    ├── gcool-wrapper.sh
-    └── gcool-wrapper.fish
+├── main.go              # CLI entry point, handles flags and shell integration
+├── CLAUDE.md            # Development guide and codebase documentation
+├── go.mod               # Module: github.com/coollabsio/gcool
+├── config/              # Configuration management
+│   └── config.go        # Manages ~/.config/gcool/config.json
+├── git/                 # Git operations wrapper
+│   └── worktree.go      # Worktree CRUD, branch management, random names
+├── session/             # Tmux session management
+│   └── tmux.go          # Session creation, attachment, listing, cleanup
+├── tui/                 # Bubble Tea TUI (Elm Architecture / MVC)
+│   ├── model.go         # State management, data structures, Tea commands
+│   ├── update.go        # Event handling, keybindings, state transitions
+│   ├── view.go          # UI rendering, modal renderers
+│   └── styles.go        # Lipgloss styling definitions
+└── shell/               # Shell integration wrappers
+    ├── gcool-wrapper.sh   # Bash/Zsh wrapper for directory switching
+    └── gcool-wrapper.fish # Fish wrapper for directory switching
 ```
+
+### Key Architectural Patterns
+
+**Bubble Tea MVC**: The TUI follows the Elm Architecture pattern via Bubble Tea:
+- **Model**: Holds all application state (worktrees, branches, sessions, UI state, modals)
+- **Update**: Handles messages (keyboard input, async operation results)
+- **View**: Renders the UI based on current model state
+
+**Async Operations**: Git and tmux operations are wrapped in Tea commands:
+- Operations run asynchronously and return typed messages
+- Results are handled in the Update function to update state
+- Examples: `worktreesLoadedMsg`, `worktreeCreatedMsg`, `branchRenamedMsg`
+
+**Modal System**: The TUI uses a modal system for different operations:
+- Create worktree, delete confirmation, branch selection, session list, rename branch, change base branch
+- All modals support Tab navigation, Enter to confirm, Esc to cancel
+
+**Shell Integration Protocol**: Communication with shell wrappers via:
+- `GCOOL_SWITCH_FILE` environment variable (preferred): Write switch data to file
+- Stdout (legacy): Print switch data in format `path|branch|auto-claude|terminal-only`
+
+**Worktree Organization**: All worktrees are created in `.workspaces/` directory at repository root with randomly generated names (adjective-noun-number pattern)
 
 ## Dependencies
 

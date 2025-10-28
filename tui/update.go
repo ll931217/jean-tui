@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,6 +39,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.worktrees = msg.worktrees
 			m.err = nil
 			m.status = ""
+
+			// Restore last selected branch if available
+			if m.configManager != nil {
+				if lastBranch := m.configManager.GetLastSelectedBranch(m.repoPath); lastBranch != "" {
+					// Find the worktree with this branch
+					for i, wt := range m.worktrees {
+						if wt.Branch == lastBranch {
+							m.selectedIndex = i
+							break
+						}
+					}
+				}
+			}
 		}
 		return m, nil
 
@@ -142,6 +156,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsLoadedMsg:
 		m.sessions = msg.sessions
 		return m, nil
+
+	case editorOpenedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.status = "Failed to open editor: " + msg.err.Error()
+			// Auto-clear error after 4 seconds
+			return m, tea.Tick(4*time.Second, func(t time.Time) tea.Msg {
+				return clearErrorMsg{}
+			})
+		} else {
+			m.status = "Opened in editor"
+			m.err = nil
+			// Auto-clear status after 2 seconds
+			return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+				return clearErrorMsg{}
+			})
+		}
 	}
 
 	return m, cmd
@@ -155,11 +186,19 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.selectedIndex > 0 {
 			m.selectedIndex--
+			// Save the last selected branch
+			if wt := m.selectedWorktree(); wt != nil && m.configManager != nil {
+				_ = m.configManager.SetLastSelectedBranch(m.repoPath, wt.Branch)
+			}
 		}
 
 	case "down", "j":
 		if m.selectedIndex < len(m.worktrees)-1 {
 			m.selectedIndex++
+			// Save the last selected branch
+			if wt := m.selectedWorktree(); wt != nil && m.configManager != nil {
+				_ = m.configManager.SetLastSelectedBranch(m.repoPath, wt.Branch)
+			}
 		}
 
 	case "r":
@@ -201,6 +240,9 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modalFocused = 0
 		m.createNewBranch = false
 		m.branchIndex = 0
+		m.searchInput.SetValue("")
+		m.searchInput.Focus()
+		m.filteredBranches = nil
 		return m, m.loadBranches
 
 	case "d", "x":
@@ -216,6 +258,10 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter", " ":
 		// Switch to selected worktree
 		if wt := m.selectedWorktree(); wt != nil && !wt.IsCurrent {
+			// Save the last selected branch before switching
+			if m.configManager != nil {
+				_ = m.configManager.SetLastSelectedBranch(m.repoPath, wt.Branch)
+			}
 			m.switchInfo = SwitchInfo{
 				Path:       wt.Path,
 				Branch:     wt.Branch,
@@ -227,6 +273,11 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "R":
 		// Rename current branch (Shift+R)
 		if wt := m.selectedWorktree(); wt != nil {
+			// Check if this is a workspace worktree (in .workspaces directory)
+			if !strings.Contains(wt.Path, ".workspaces") {
+				m.status = "Cannot rename main branch. Only workspace branches can be renamed."
+				return m, nil
+			}
 			m.modal = renameModal
 			m.modalFocused = 0
 			m.nameInput.SetValue(wt.Branch)
@@ -248,6 +299,10 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "t":
 		// Open terminal in a separate tmux session (not the Claude session)
 		if wt := m.selectedWorktree(); wt != nil {
+			// Save the last selected branch before switching
+			if m.configManager != nil {
+				_ = m.configManager.SetLastSelectedBranch(m.repoPath, wt.Branch)
+			}
 			m.switchInfo = SwitchInfo{
 				Path:         wt.Path,
 				Branch:       wt.Branch,
@@ -256,6 +311,45 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		}
+
+	case "o":
+		// Open worktree in default IDE
+		if wt := m.selectedWorktree(); wt != nil {
+			m.status = "Opening in editor..."
+			return m, m.openInEditor(wt.Path)
+		}
+
+	case "e":
+		// Open editor selection modal
+		m.modal = editorSelectModal
+		m.modalFocused = 0
+		m.editorIndex = 0
+
+		// Find current editor in the list
+		if m.configManager != nil {
+			currentEditor := m.configManager.GetEditor(m.repoPath)
+			for i, editor := range m.editors {
+				if editor == currentEditor {
+					m.editorIndex = i
+					break
+				}
+			}
+		}
+		return m, nil
+
+	case "s":
+		// Open settings modal
+		m.modal = settingsModal
+		m.modalFocused = 0
+		m.settingsIndex = 0
+		return m, nil
+
+	case "S":
+		// Open session list modal (Shift+S)
+		m.modal = sessionListModal
+		m.modalFocused = 0
+		m.sessionIndex = 0
+		return m, m.loadSessions
 	}
 
 	return m, nil
@@ -285,6 +379,15 @@ func (m Model) handleModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case changeBaseBranchModal:
 		return m.handleChangeBaseBranchModalInput(msg)
+
+	case editorSelectModal:
+		return m.handleEditorSelectModalInput(msg)
+
+	case settingsModal:
+		return m.handleSettingsModalInput(msg)
+
+	case tmuxConfigModal:
+		return m.handleTmuxConfigModalInput(msg)
 	}
 
 	return m, cmd
@@ -378,33 +481,51 @@ func (m Model) handleDeleteModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleBranchSelectModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg.String() {
 	case "esc":
 		m.modal = noModal
+		m.searchInput.Blur()
 		return m, nil
 
 	case "up", "k":
-		if m.branchIndex > 0 {
+		if m.modalFocused == 0 {
+			// In search input, move focus down to list
+			m.modalFocused = 1
+			m.searchInput.Blur()
+		} else if m.modalFocused == 1 && m.branchIndex > 0 {
+			// In list, move selection up
 			m.branchIndex--
 		}
 
 	case "down", "j":
-		if m.branchIndex < len(m.branches)-1 {
-			m.branchIndex++
+		if m.modalFocused == 0 {
+			// In search input, move focus down to list
+			m.modalFocused = 1
+			m.searchInput.Blur()
+		} else if m.modalFocused == 1 {
+			// In list, move selection down
+			branches := m.filteredBranches
+			if len(branches) == 0 {
+				branches = m.branches
+			}
+			if m.branchIndex < len(branches)-1 {
+				m.branchIndex++
+			}
 		}
 
 	case "tab":
-		// Toggle between branch list and buttons
+		// Cycle: search -> list -> OK button -> Cancel button -> search
+		m.modalFocused = (m.modalFocused + 1) % 4
 		if m.modalFocused == 0 {
-			m.modalFocused = 1 // Move to OK button
-		} else if m.modalFocused == 1 {
-			m.modalFocused = 2 // Move to Cancel button
+			m.searchInput.Focus()
 		} else {
-			m.modalFocused = 0 // Back to list
+			m.searchInput.Blur()
 		}
 
 	case "enter":
-		if m.modalFocused == 0 || m.modalFocused == 1 {
+		if m.modalFocused == 0 || m.modalFocused == 1 || m.modalFocused == 2 {
 			// Select branch and create worktree directly with random name
 			branch := m.selectedBranch()
 			if branch == "" {
@@ -419,15 +540,26 @@ func (m Model) handleBranchSelectModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 			}
 
 			m.modal = noModal
+			m.searchInput.Blur()
 			return m, m.createWorktree(path, branch, false)
-		} else if m.modalFocused == 2 {
-			// Cancel
+		} else if m.modalFocused == 3 {
+			// Cancel button
 			m.modal = noModal
+			m.searchInput.Blur()
 			return m, nil
 		}
 	}
 
-	return m, nil
+	// Handle search input typing
+	if m.modalFocused == 0 {
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		// Filter branches based on search
+		m.filteredBranches = m.filterBranches(m.searchInput.Value())
+		// Reset branch index when filter changes
+		m.branchIndex = 0
+	}
+
+	return m, cmd
 }
 
 func (m Model) handleCheckoutBranchModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -692,4 +824,177 @@ func (m Model) handleChangeBaseBranchModalInput(msg tea.KeyMsg) (tea.Model, tea.
 	}
 
 	return m, cmd
+}
+
+func (m Model) handleEditorSelectModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.modal = noModal
+		return m, nil
+
+	case "up", "k":
+		if m.editorIndex > 0 {
+			m.editorIndex--
+		}
+
+	case "down", "j":
+		if m.editorIndex < len(m.editors)-1 {
+			m.editorIndex++
+		}
+
+	case "enter":
+		// Save the selected editor
+		if m.editorIndex >= 0 && m.editorIndex < len(m.editors) {
+			selectedEditor := m.editors[m.editorIndex]
+			if m.configManager != nil {
+				if err := m.configManager.SetEditor(m.repoPath, selectedEditor); err != nil {
+					m.err = err
+					m.status = "Failed to save editor preference"
+				} else {
+					m.status = "Editor set to: " + selectedEditor
+				}
+			}
+		}
+		m.modal = noModal
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m Model) handleSettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.modal = noModal
+		return m, nil
+
+	case "up", "k":
+		if m.settingsIndex > 0 {
+			m.settingsIndex--
+		}
+
+	case "down", "j":
+		if m.settingsIndex < 2 { // Now 3 settings (editor, base branch, tmux config)
+			m.settingsIndex++
+		}
+
+	case "enter":
+		// Open the selected setting's modal
+		switch m.settingsIndex {
+		case 0:
+			// Editor setting - open editor select modal
+			m.modal = editorSelectModal
+			m.modalFocused = 0
+			m.editorIndex = 0
+
+			// Find current editor in the list
+			if m.configManager != nil {
+				currentEditor := m.configManager.GetEditor(m.repoPath)
+				for i, editor := range m.editors {
+					if editor == currentEditor {
+						m.editorIndex = i
+						break
+					}
+				}
+			}
+			return m, nil
+
+		case 1:
+			// Base branch setting - open change base branch modal
+			m.modal = changeBaseBranchModal
+			m.modalFocused = 0
+			m.branchIndex = 0
+			m.searchInput.SetValue("")
+			m.searchInput.Focus()
+			m.filteredBranches = nil
+			return m, m.loadBranches
+
+		case 2:
+			// Tmux config setting - open tmux config modal
+			m.modal = tmuxConfigModal
+			m.modalFocused = 0
+			return m, nil
+		}
+	}
+
+	return m, nil
+}
+
+func (m Model) handleTmuxConfigModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.modal = settingsModal
+		return m, nil
+
+	case "tab", "shift+tab":
+		// Check if config exists to determine button count
+		hasConfig := false
+		if m.sessionManager != nil {
+			installed, _ := m.sessionManager.HasGcoolTmuxConfig()
+			hasConfig = installed
+		}
+
+		// If config exists: Update (0), Remove (1), Cancel (2) = 3 buttons
+		// If not exists: Install (0), Cancel (1) = 2 buttons
+		if hasConfig {
+			m.modalFocused = (m.modalFocused + 1) % 3
+		} else {
+			m.modalFocused = (m.modalFocused + 1) % 2
+		}
+		return m, nil
+
+	case "enter":
+		if m.sessionManager == nil {
+			m.modal = settingsModal
+			return m, nil
+		}
+
+		hasConfig, err := m.sessionManager.HasGcoolTmuxConfig()
+		if err != nil {
+			m.status = "Error checking tmux config: " + err.Error()
+			m.modal = settingsModal
+			return m, nil
+		}
+
+		if hasConfig {
+			// Config exists: Update (0), Remove (1), Cancel (2)
+			switch m.modalFocused {
+			case 0:
+				// Update button - reinstalls config (remove + add)
+				if err := m.sessionManager.AddGcoolTmuxConfig(); err != nil {
+					m.status = "Failed to update tmux config: " + err.Error()
+				} else {
+					m.status = "gcool tmux config updated! New tmux sessions will use the updated config."
+				}
+			case 1:
+				// Remove button
+				if err := m.sessionManager.RemoveGcoolTmuxConfig(); err != nil {
+					m.status = "Failed to remove tmux config: " + err.Error()
+				} else {
+					m.status = "gcool tmux config removed. New tmux sessions will use your default config."
+				}
+			case 2:
+				// Cancel button - do nothing
+			}
+		} else {
+			// Config doesn't exist: Install (0), Cancel (1)
+			switch m.modalFocused {
+			case 0:
+				// Install button
+				if err := m.sessionManager.AddGcoolTmuxConfig(); err != nil {
+					m.status = "Failed to add tmux config: " + err.Error()
+				} else {
+					m.status = "gcool tmux config installed! New tmux sessions will use this config."
+				}
+			case 1:
+				// Cancel button - do nothing
+			}
+		}
+
+		// Return to settings modal
+		m.modal = settingsModal
+		return m, nil
+	}
+
+	return m, nil
 }

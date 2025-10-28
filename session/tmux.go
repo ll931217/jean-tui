@@ -78,6 +78,162 @@ func (m *Manager) Create(sessionName, path string, autoStartClaude bool) error {
 	return cmd.Run()
 }
 
+const gcoolTmuxConfigMarker = "# === GCOOL_TMUX_CONFIG_START_DO_NOT_MODIFY_THIS_LINE ==="
+const gcoolTmuxConfigEnd = "# === GCOOL_TMUX_CONFIG_END_DO_NOT_MODIFY_THIS_LINE ==="
+
+const gcoolTmuxConfig = `
+# === GCOOL_TMUX_CONFIG_START_DO_NOT_MODIFY_THIS_LINE ===
+# gcool opinionated tmux configuration
+# WARNING: Do not modify the marker lines above/below - they are used for automatic updates
+# You can safely delete this entire section if you no longer want these settings
+
+# Enable mouse support for scrolling
+set -g mouse on
+
+# Enable mouse scrolling in copy mode
+bind -n WheelUpPane if-shell -F -t = "#{mouse_any_flag}" "send-keys -M" "if -Ft= '#{pane_in_mode}' 'send-keys -M' 'copy-mode -e; send-keys -M'"
+
+# Make scrolling work like in normal terminal
+set -g terminal-overrides 'xterm*:smcup@:rmcup@'
+
+# Better scrollback buffer (10000 lines)
+set -g history-limit 10000
+
+# Enable focus events (useful for vim/neovim)
+set -g focus-events on
+
+# Enable 256 colors
+set -g default-terminal "screen-256color"
+set -ga terminal-overrides ",xterm-256color:Tc"
+
+# Start window numbering at 1 (easier to switch)
+set -g base-index 1
+set -g pane-base-index 1
+
+# Renumber windows when one is closed
+set -g renumber-windows on
+
+# Ctrl-D to detach
+bind-key -n C-d detach-client
+
+# Status bar styling (minimal)
+set -g status-style bg=default,fg=white
+set -g status-left-length 40
+set -g status-right-length 60
+set -g status-left "#[fg=green]gcool:#[fg=cyan]#S "
+set -g status-right "#[fg=yellow]%H:%M #[fg=white]%d-%b-%y"
+
+# Pane border colors
+set -g pane-border-style fg=colour238
+set -g pane-active-border-style fg=colour33
+
+# Message styling
+set -g message-style bg=colour33,fg=black,bold
+# === GCOOL_TMUX_CONFIG_END_DO_NOT_MODIFY_THIS_LINE ===
+`
+
+// HasGcoolTmuxConfig checks if ~/.tmux.conf contains gcool config
+func (m *Manager) HasGcoolTmuxConfig() (bool, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return false, err
+	}
+
+	tmuxConfPath := homeDir + "/.tmux.conf"
+	content, err := os.ReadFile(tmuxConfPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return strings.Contains(string(content), gcoolTmuxConfigMarker), nil
+}
+
+// AddGcoolTmuxConfig appends or updates gcool config in ~/.tmux.conf
+func (m *Manager) AddGcoolTmuxConfig() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	tmuxConfPath := homeDir + "/.tmux.conf"
+
+	// Check if config already exists
+	hasConfig, err := m.HasGcoolTmuxConfig()
+	if err != nil {
+		return err
+	}
+
+	if hasConfig {
+		// Update existing config by removing old and appending new
+		if err := m.RemoveGcoolTmuxConfig(); err != nil {
+			return fmt.Errorf("failed to update config (remove old): %w", err)
+		}
+	}
+
+	// Append config
+	f, err := os.OpenFile(tmuxConfPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(gcoolTmuxConfig); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// RemoveGcoolTmuxConfig removes gcool config from ~/.tmux.conf
+func (m *Manager) RemoveGcoolTmuxConfig() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	tmuxConfPath := homeDir + "/.tmux.conf"
+
+	content, err := os.ReadFile(tmuxConfPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("~/.tmux.conf does not exist")
+		}
+		return err
+	}
+
+	contentStr := string(content)
+
+	// Find and remove the gcool config section
+	startIdx := strings.Index(contentStr, gcoolTmuxConfigMarker)
+	if startIdx == -1 {
+		return fmt.Errorf("gcool tmux config not found in ~/.tmux.conf")
+	}
+
+	endIdx := strings.Index(contentStr, gcoolTmuxConfigEnd)
+	if endIdx == -1 {
+		return fmt.Errorf("gcool tmux config end marker not found in ~/.tmux.conf")
+	}
+
+	// Remove the section (including the end marker line)
+	endIdx += len(gcoolTmuxConfigEnd)
+	// Also remove trailing newline if present
+	if endIdx < len(contentStr) && contentStr[endIdx] == '\n' {
+		endIdx++
+	}
+
+	newContent := contentStr[:startIdx] + contentStr[endIdx:]
+
+	// Write back
+	if err := os.WriteFile(tmuxConfPath, []byte(newContent), 0644); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Attach attaches to an existing tmux session
 func (m *Manager) Attach(sessionName string) error {
 	cmd := exec.Command("tmux", "attach-session", "-t", sessionName)

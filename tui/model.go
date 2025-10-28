@@ -1,13 +1,15 @@
 package tui
 
 import (
+	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/heyandras/gwt/config"
-	"github.com/heyandras/gwt/git"
-	"github.com/heyandras/gwt/session"
+	"github.com/coollabsio/gcool/config"
+	"github.com/coollabsio/gcool/git"
+	"github.com/coollabsio/gcool/session"
 )
 
 // SwitchInfo contains information about the worktree to switch to
@@ -29,6 +31,9 @@ const (
 	sessionListModal
 	renameModal
 	changeBaseBranchModal
+	editorSelectModal
+	settingsModal
+	tmuxConfigModal
 )
 
 // Model represents the TUI state
@@ -54,14 +59,17 @@ type Model struct {
 	baseBranch      string     // Base branch for new worktrees
 
 	// Modal state
-	modal           modalType
-	modalFocused    int // Which input/button is focused in modal
-	nameInput       textinput.Model
-	pathInput       textinput.Model
-	searchInput     textinput.Model
-	branchIndex     int
+	modal            modalType
+	modalFocused     int // Which input/button is focused in modal
+	nameInput        textinput.Model
+	pathInput        textinput.Model
+	searchInput      textinput.Model
+	branchIndex      int
 	filteredBranches []string // Filtered list of branches for search
-	createNewBranch bool
+	createNewBranch  bool
+	editorIndex      int      // Selected editor index
+	editors          []string // List of available editors
+	settingsIndex    int      // Selected setting option index
 }
 
 // NewModel creates a new TUI model
@@ -92,6 +100,17 @@ func NewModel(repoPath string, autoClaude bool) Model {
 		absoluteRepoPath = root
 	}
 
+	// List of common editors
+	editors := []string{
+		"code",    // VS Code
+		"cursor",  // Cursor
+		"nvim",    // Neovim
+		"vim",     // Vim
+		"subl",    // Sublime Text
+		"atom",    // Atom
+		"zed",     // Zed
+	}
+
 	return Model{
 		gitManager:     gitManager,
 		sessionManager: session.NewManager(),
@@ -101,6 +120,7 @@ func NewModel(repoPath string, autoClaude bool) Model {
 		searchInput:    searchInput,
 		autoClaude:     autoClaude,
 		repoPath:       absoluteRepoPath,
+		editors:        editors,
 	}
 }
 
@@ -150,6 +170,10 @@ type (
 	clearErrorMsg struct{}
 
 	statusMsg string
+
+	editorOpenedMsg struct {
+		err error
+	}
 )
 
 // Commands
@@ -231,6 +255,24 @@ func (m Model) loadBaseBranch() tea.Msg {
 		return baseBranchLoadedMsg{branch: defaultBranch}
 	}
 	return baseBranchLoadedMsg{branch: branch}
+}
+
+func (m Model) openInEditor(path string) tea.Cmd {
+	return func() tea.Msg {
+		// Get configured editor (defaults to "code")
+		editor := "code"
+		if m.configManager != nil {
+			editor = m.configManager.GetEditor(m.repoPath)
+		}
+
+		// Open editor in background
+		cmd := exec.Command(editor, path)
+		err := cmd.Start()
+		if err != nil {
+			return editorOpenedMsg{err: fmt.Errorf("failed to open %s: %w. Press 'e' to select a different editor", editor, err)}
+		}
+		return editorOpenedMsg{err: nil}
+	}
 }
 
 // Helper methods

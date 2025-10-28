@@ -173,12 +173,13 @@ func (m Model) renderHelpBar() string {
 		"↑/↓ navigate",
 		"n new branch",
 		"a existing branch",
-		"c change base",
-		"C checkout",
+		"o open editor",
 		"t terminal",
 	}
 
 	row2 := []string{
+		"s settings",
+		"S sessions",
 		"R rename",
 		"d delete",
 		"r refresh",
@@ -211,6 +212,12 @@ func (m Model) renderModal() string {
 		return m.renderRenameModal()
 	case changeBaseBranchModal:
 		return m.renderChangeBaseBranchModal()
+	case editorSelectModal:
+		return m.renderEditorSelectModal()
+	case settingsModal:
+		return m.renderSettingsModal()
+	case tmuxConfigModal:
+		return m.renderTmuxConfigModal()
 	}
 	return ""
 }
@@ -321,7 +328,19 @@ func (m Model) renderBranchSelectModal() string {
 	b.WriteString(modalTitleStyle.Render("Select Branch"))
 	b.WriteString("\n\n")
 
-	if len(m.branches) == 0 {
+	// Search input
+	b.WriteString(inputLabelStyle.Render("Search:"))
+	b.WriteString("\n")
+	b.WriteString(m.searchInput.View())
+	b.WriteString("\n\n")
+
+	// Use filtered branches if search is active
+	branches := m.branches
+	if m.searchInput.Value() != "" {
+		branches = m.filteredBranches
+	}
+
+	if len(branches) == 0 {
 		b.WriteString(normalItemStyle.Render("No branches found"))
 		b.WriteString("\n\n")
 	} else {
@@ -332,8 +351,8 @@ func (m Model) renderBranchSelectModal() string {
 			start = 0
 		}
 		end := start + maxVisible
-		if end > len(m.branches) {
-			end = len(m.branches)
+		if end > len(branches) {
+			end = len(branches)
 			start = end - maxVisible
 			if start < 0 {
 				start = 0
@@ -341,7 +360,7 @@ func (m Model) renderBranchSelectModal() string {
 		}
 
 		for i := start; i < end; i++ {
-			branch := m.branches[i]
+			branch := branches[i]
 			if i == m.branchIndex {
 				b.WriteString(selectedItemStyle.Render(fmt.Sprintf("› %s", branch)))
 			} else {
@@ -351,7 +370,7 @@ func (m Model) renderBranchSelectModal() string {
 		}
 
 		b.WriteString("\n")
-		b.WriteString(helpStyle.Render(fmt.Sprintf("Showing %d-%d of %d branches", start+1, end, len(m.branches))))
+		b.WriteString(helpStyle.Render(fmt.Sprintf("Showing %d-%d of %d branches", start+1, end, len(branches))))
 		b.WriteString("\n")
 	}
 
@@ -679,6 +698,221 @@ func (m Model) renderChangeBaseBranchModal() string {
 		m.height,
 		lipgloss.Center,
 		lipgloss.Center,
+		modalStyle.Render(b.String()),
+	)
+}
+
+func (m Model) renderEditorSelectModal() string {
+	var b strings.Builder
+
+	b.WriteString(modalTitleStyle.Render("Select Editor"))
+	b.WriteString("\n\n")
+
+	// Get current editor
+	currentEditor := "code"
+	if m.configManager != nil {
+		currentEditor = m.configManager.GetEditor(m.repoPath)
+	}
+
+	b.WriteString(helpStyle.Render(fmt.Sprintf("Current: %s", currentEditor)))
+	b.WriteString("\n\n")
+
+	// Show editor list
+	for i, editor := range m.editors {
+		if i == m.editorIndex {
+			b.WriteString(selectedItemStyle.Render(fmt.Sprintf("› %s", editor)))
+		} else {
+			b.WriteString(normalItemStyle.Render(fmt.Sprintf("  %s", editor)))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("↑↓/jk navigate • Enter to select • Esc to cancel"))
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		modalStyle.Render(b.String()),
+	)
+}
+
+func (m Model) renderSettingsModal() string {
+	var b strings.Builder
+
+	b.WriteString(modalTitleStyle.Render("Settings"))
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("Configure gcool settings for this repository"))
+	b.WriteString("\n\n")
+
+	// Define settings options
+	settings := []struct {
+		name        string
+		key         string
+		description string
+		current     string
+	}{
+		{
+			name:        "Editor",
+			key:         "e",
+			description: "Default editor for opening worktrees",
+			current: func() string {
+				if m.configManager != nil {
+					return m.configManager.GetEditor(m.repoPath)
+				}
+				return "code"
+			}(),
+		},
+		{
+			name:        "Base Branch",
+			key:         "c",
+			description: "Base branch for creating new worktrees",
+			current:     m.baseBranch,
+		},
+		{
+			name:        "Tmux Config",
+			key:         "t",
+			description: "Add/remove gcool tmux config to ~/.tmux.conf",
+			current: func() string {
+				if m.sessionManager != nil {
+					hasConfig, err := m.sessionManager.HasGcoolTmuxConfig()
+					if err == nil && hasConfig {
+						return "Installed"
+					}
+				}
+				return "Not installed"
+			}(),
+		},
+	}
+
+	// Render settings list
+	for i, setting := range settings {
+		var line string
+		if i == m.settingsIndex {
+			line = selectedItemStyle.Render(fmt.Sprintf("› [%s] %s", setting.key, setting.name))
+		} else {
+			line = normalItemStyle.Render(fmt.Sprintf("  [%s] %s", setting.key, setting.name))
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+
+		// Show description and current value
+		if i == m.settingsIndex {
+			b.WriteString(helpStyle.Render(fmt.Sprintf("    %s", setting.description)))
+			b.WriteString("\n")
+			b.WriteString(helpStyle.Render(fmt.Sprintf("    Current: %s", setting.current)))
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("↑↓/jk navigate • Enter to configure • Esc to close"))
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		modalStyle.Render(b.String()),
+	)
+}
+
+func (m Model) renderTmuxConfigModal() string {
+	var b strings.Builder
+
+	b.WriteString(modalTitleStyle.Render("Tmux Configuration"))
+	b.WriteString("\n\n")
+
+	// Check current status
+	hasConfig := false
+	if m.sessionManager != nil {
+		installed, err := m.sessionManager.HasGcoolTmuxConfig()
+		if err == nil {
+			hasConfig = installed
+		}
+	}
+
+	if hasConfig {
+		b.WriteString(helpStyle.Render("gcool tmux config is currently installed in ~/.tmux.conf"))
+		b.WriteString("\n\n")
+		b.WriteString(normalItemStyle.Render("Current features:"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  • Mouse support for scrolling"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  • 10,000 line scrollback buffer"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  • 256 color support"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  • Ctrl-D to detach from session"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  • Improved status bar"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  • Better pane border colors"))
+		b.WriteString("\n\n")
+
+		// Buttons
+		updateBtn := "Update Config"
+		removeBtn := "Remove Config"
+		cancelBtn := "Cancel"
+
+		if m.modalFocused == 0 {
+			b.WriteString(selectedButtonStyle.Render(updateBtn))
+		} else {
+			b.WriteString(buttonStyle.Render(updateBtn))
+		}
+		b.WriteString(" ")
+		if m.modalFocused == 1 {
+			b.WriteString(selectedCancelButtonStyle.Render(removeBtn))
+		} else {
+			b.WriteString(cancelButtonStyle.Render(removeBtn))
+		}
+		b.WriteString(" ")
+		if m.modalFocused == 2 {
+			b.WriteString(selectedCancelButtonStyle.Render(cancelBtn))
+		} else {
+			b.WriteString(cancelButtonStyle.Render(cancelBtn))
+		}
+	} else {
+		b.WriteString(helpStyle.Render("gcool has an opinionated tmux configuration that includes:"))
+		b.WriteString("\n\n")
+		b.WriteString(helpStyle.Render("  • Mouse support for scrolling"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  • 10,000 line scrollback buffer"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  • 256 color support"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  • Ctrl-D to detach from session"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  • Improved status bar"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  • Better pane border colors"))
+		b.WriteString("\n\n")
+		b.WriteString(normalItemStyle.Render("This will be appended to your ~/.tmux.conf in a marked section"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("(You can safely delete the section later, or update it from this menu)"))
+		b.WriteString("\n\n")
+
+		// Buttons
+		installBtn := "Install Config"
+		cancelBtn := "Cancel"
+
+		if m.modalFocused == 0 {
+			b.WriteString(selectedButtonStyle.Render(installBtn))
+		} else {
+			b.WriteString(buttonStyle.Render(installBtn))
+		}
+		b.WriteString(" ")
+		if m.modalFocused == 1 {
+			b.WriteString(selectedCancelButtonStyle.Render(cancelBtn))
+		} else {
+			b.WriteString(cancelButtonStyle.Render(cancelBtn))
+		}
+	}
+
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("Tab to switch • Enter to confirm • Esc to cancel"))
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
 		modalStyle.Render(b.String()),
 	)
 }
