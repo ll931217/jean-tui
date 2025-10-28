@@ -209,24 +209,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 
-	case tickMsg:
-		// Schedule the next check and trigger branch status update
-		return m, tea.Batch(
-			m.scheduleBranchCheck(),
-			m.checkBranchStatuses(),
-		)
-
-	case branchStatusCheckedMsg:
-		if msg.err != nil {
-			// Silently fail - don't bother user with fetch errors
-			// Just schedule the next check
-			return m, nil
-		}
-		// Update worktrees with fresh status
-		m.worktrees = msg.worktrees
-		m.lastFetchTime = time.Now()
-		return m, nil
-
 	case branchPulledMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -243,11 +225,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "Successfully pulled changes from base branch"
 			m.err = nil
-			// Refresh worktree list and status after successful pull
-			cmd = tea.Batch(
-				m.loadWorktrees,
-				m.checkBranchStatuses(),
-			)
+			// Refresh worktree list after successful pull
+			cmd = m.loadWorktrees
 			// Auto-clear status after 2 seconds
 			return m, tea.Sequence(
 				cmd,

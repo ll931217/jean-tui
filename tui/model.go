@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -62,9 +61,7 @@ type Model struct {
 	baseBranch      string     // Base branch for new worktrees
 
 	// Branch status tracking
-	lastFetchTime     time.Time // Last time we fetched from remote
-	fetchInterval     int       // Fetch interval in seconds (from config)
-	lastCreatedBranch string    // Last created branch name (for auto-selection after creation)
+	lastCreatedBranch string // Last created branch name (for auto-selection after creation)
 
 	// Modal state
 	modal                  modalType
@@ -137,17 +134,9 @@ func NewModel(repoPath string, autoClaude bool) Model {
 
 // Init initializes the model
 func (m Model) Init() tea.Cmd {
-	// Load fetch interval from config (default 10s)
-	if m.configManager != nil {
-		m.fetchInterval = m.configManager.GetAutoFetchInterval(m.repoPath)
-	} else {
-		m.fetchInterval = 10
-	}
-
 	return tea.Batch(
 		m.loadWorktrees,
 		m.loadBaseBranch,
-		m.scheduleBranchCheck(),
 		tea.EnterAltScreen,
 	)
 }
@@ -199,15 +188,8 @@ type (
 		prURL string
 	}
 
-	tickMsg struct{}
-
-	branchStatusCheckedMsg struct {
-		worktrees []git.Worktree
-		err       error
-	}
-
 	branchPulledMsg struct {
-		err        error
+		err         error
 		hadConflict bool
 	}
 )
@@ -435,65 +417,6 @@ func (m Model) loadSessions() tea.Msg {
 
 type sessionsLoadedMsg struct {
 	sessions []session.Session
-}
-
-// scheduleBranchCheck returns a command that triggers periodic branch status checks
-func (m Model) scheduleBranchCheck() tea.Cmd {
-	return tea.Tick(time.Duration(m.fetchInterval)*time.Second, func(t time.Time) tea.Msg {
-		return tickMsg{}
-	})
-}
-
-// checkBranchStatuses checks the status of all worktrees against the base branch
-func (m Model) checkBranchStatuses() tea.Cmd {
-	return func() tea.Msg {
-		// Fetch from remote first (only if enough time has passed to avoid spamming)
-		now := time.Now()
-		if now.Sub(m.lastFetchTime) >= time.Duration(m.fetchInterval)*time.Second {
-			if err := m.gitManager.FetchRemote(); err != nil {
-				// Don't fail completely if fetch fails, just skip status check this time
-				return branchStatusCheckedMsg{err: err}
-			}
-		}
-
-		// Get fresh worktree list
-		worktrees, err := m.gitManager.List()
-		if err != nil {
-			return branchStatusCheckedMsg{err: err}
-		}
-
-		// Skip if base branch not set
-		if m.baseBranch == "" {
-			return branchStatusCheckedMsg{worktrees: worktrees}
-		}
-
-		// Check status for each worktree
-		for i := range worktrees {
-			wt := &worktrees[i]
-			// Skip detached HEAD state
-			if strings.HasPrefix(wt.Branch, "(detached") {
-				continue
-			}
-
-			// Skip the base branch itself
-			if wt.Branch == m.baseBranch {
-				continue
-			}
-
-			// Get branch status
-			ahead, behind, err := m.gitManager.GetBranchStatus(wt.Path, wt.Branch, m.baseBranch)
-			if err != nil {
-				// If error, just skip this worktree
-				continue
-			}
-
-			wt.AheadCount = ahead
-			wt.BehindCount = behind
-			wt.IsOutdated = behind > 0
-		}
-
-		return branchStatusCheckedMsg{worktrees: worktrees, err: nil}
-	}
 }
 
 // pullFromBaseBranch pulls changes from the base branch into the worktree
