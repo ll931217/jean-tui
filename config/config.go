@@ -1,0 +1,106 @@
+package config
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// Config represents the global gcool configuration
+type Config struct {
+	Repositories map[string]*RepoConfig `json:"repositories"`
+}
+
+// RepoConfig represents configuration for a specific repository
+type RepoConfig struct {
+	BaseBranch string `json:"base_branch"`
+}
+
+// Manager handles configuration loading and saving
+type Manager struct {
+	configPath string
+	config     *Config
+}
+
+// NewManager creates a new configuration manager
+func NewManager() (*Manager, error) {
+	// Get user home directory
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// Create config directory: ~/.config/gcool
+	configDir := filepath.Join(home, ".config", "gcool")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.json")
+
+	m := &Manager{
+		configPath: configPath,
+	}
+
+	// Load existing config or create new one
+	if err := m.load(); err != nil {
+		// If file doesn't exist, create empty config
+		m.config = &Config{
+			Repositories: make(map[string]*RepoConfig),
+		}
+	}
+
+	return m, nil
+}
+
+// load reads the configuration from disk
+func (m *Manager) load() error {
+	data, err := os.ReadFile(m.configPath)
+	if err != nil {
+		return err
+	}
+
+	m.config = &Config{}
+	return json.Unmarshal(data, m.config)
+}
+
+// save writes the configuration to disk
+func (m *Manager) save() error {
+	data, err := json.MarshalIndent(m.config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	return os.WriteFile(m.configPath, data, 0644)
+}
+
+// GetBaseBranch returns the base branch for a repository
+func (m *Manager) GetBaseBranch(repoPath string) string {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		return repo.BaseBranch
+	}
+	return ""
+}
+
+// SetBaseBranch sets the base branch for a repository
+func (m *Manager) SetBaseBranch(repoPath, branch string) error {
+	if m.config.Repositories == nil {
+		m.config.Repositories = make(map[string]*RepoConfig)
+	}
+
+	if _, ok := m.config.Repositories[repoPath]; !ok {
+		m.config.Repositories[repoPath] = &RepoConfig{}
+	}
+
+	m.config.Repositories[repoPath].BaseBranch = branch
+	return m.save()
+}
+
+// GetRepoConfig returns the configuration for a specific repository
+func (m *Manager) GetRepoConfig(repoPath string) *RepoConfig {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		return repo
+	}
+	return &RepoConfig{}
+}
