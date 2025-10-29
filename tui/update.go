@@ -717,8 +717,8 @@ func (m Model) handleBranchSelectModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 		}
 
 	case "enter":
-		if m.modalFocused == 0 || m.modalFocused == 1 || m.modalFocused == 2 {
-			// Select branch and create worktree directly with random name
+		if m.modalFocused == 2 {
+			// OK button: Select branch and create worktree directly with random name
 			branch := m.selectedBranch()
 			if branch == "" {
 				return m, nil
@@ -739,16 +739,32 @@ func (m Model) handleBranchSelectModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 			m.modal = noModal
 			m.searchInput.Blur()
 			return m, nil
+		} else if m.modalFocused == 0 || m.modalFocused == 1 {
+			// In search input or list: move focus to OK button
+			m.modalFocused = 2
+			m.searchInput.Blur()
+			return m, nil
 		}
 	}
 
 	// Handle search input typing
-	if m.modalFocused == 0 {
-		m.searchInput, cmd = m.searchInput.Update(msg)
-		// Filter branches based on search
-		m.filteredBranches = m.filterBranches(m.searchInput.Value())
-		// Reset branch index when filter changes
-		m.branchIndex = 0
+	// Pass all non-navigation keys to search input when in search or list mode
+	if m.modalFocused == 0 || m.modalFocused == 1 {
+		// Check if this is a navigation key that's already been handled
+		key := msg.String()
+		isNavigationKey := key == "up" || key == "k" || key == "down" || key == "j" ||
+			key == "tab" || key == "enter" || key == "esc"
+
+		if !isNavigationKey {
+			// Pass to search input for typing
+			m.searchInput.Focus()
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			// Filter branches based on search
+			m.filteredBranches = m.filterBranches(m.searchInput.Value())
+			// Reset branch index when filter changes
+			m.branchIndex = 0
+			m.modalFocused = 0 // Ensure we're tracking search as focused
+		}
 	}
 
 	return m, cmd
@@ -799,8 +815,8 @@ func (m Model) handleCheckoutBranchModalInput(msg tea.KeyMsg) (tea.Model, tea.Cm
 		}
 
 	case "enter":
-		if m.modalFocused == 0 || m.modalFocused == 1 || m.modalFocused == 2 {
-			// Checkout the selected branch in main repository
+		if m.modalFocused == 2 {
+			// Checkout button: Checkout the selected branch in main repository
 			branch := m.selectedBranch()
 			if branch == "" {
 				return m, nil
@@ -815,16 +831,32 @@ func (m Model) handleCheckoutBranchModalInput(msg tea.KeyMsg) (tea.Model, tea.Cm
 			m.modal = noModal
 			m.searchInput.Blur()
 			return m, nil
+		} else if m.modalFocused == 0 || m.modalFocused == 1 {
+			// In search input or list: move focus to Checkout button
+			m.modalFocused = 2
+			m.searchInput.Blur()
+			return m, nil
 		}
 	}
 
 	// Handle search input typing
-	if m.modalFocused == 0 {
-		m.searchInput, cmd = m.searchInput.Update(msg)
-		// Filter branches based on search
-		m.filteredBranches = m.filterBranches(m.searchInput.Value())
-		// Reset branch index when search changes
-		m.branchIndex = 0
+	// Pass all non-navigation keys to search input when in search or list mode
+	if m.modalFocused == 0 || m.modalFocused == 1 {
+		// Check if this is a navigation key that's already been handled
+		key := msg.String()
+		isNavigationKey := key == "up" || key == "k" || key == "down" || key == "j" ||
+			key == "tab" || key == "enter" || key == "esc"
+
+		if !isNavigationKey {
+			// Pass to search input for typing
+			m.searchInput.Focus()
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			// Filter branches based on search
+			m.filteredBranches = m.filterBranches(m.searchInput.Value())
+			// Reset branch index when search changes
+			m.branchIndex = 0
+			m.modalFocused = 0 // Ensure we're tracking search as focused
+		}
 	}
 
 	return m, cmd
@@ -975,8 +1007,8 @@ func (m Model) handleChangeBaseBranchModalInput(msg tea.KeyMsg) (tea.Model, tea.
 		}
 
 	case "enter":
-		if m.modalFocused == 0 || m.modalFocused == 1 || m.modalFocused == 2 {
-			// Set the selected branch as base branch
+		if m.modalFocused == 2 {
+			// Set button: Set the selected branch as base branch
 			newBaseBranch := m.selectedBranch()
 			if newBaseBranch == "" {
 				return m, nil
@@ -1003,16 +1035,32 @@ func (m Model) handleChangeBaseBranchModalInput(msg tea.KeyMsg) (tea.Model, tea.
 			m.modal = noModal
 			m.searchInput.Blur()
 			return m, nil
+		} else if m.modalFocused == 0 || m.modalFocused == 1 {
+			// In search input or list: move focus to Set button
+			m.modalFocused = 2
+			m.searchInput.Blur()
+			return m, nil
 		}
 	}
 
 	// Handle search input typing
-	if m.modalFocused == 0 {
-		m.searchInput, cmd = m.searchInput.Update(msg)
-		// Filter branches based on search
-		m.filteredBranches = m.filterBranches(m.searchInput.Value())
-		// Reset branch index when search changes
-		m.branchIndex = 0
+	// Pass all non-navigation keys to search input when in search or list mode
+	if m.modalFocused == 0 || m.modalFocused == 1 {
+		// Check if this is a navigation key that's already been handled
+		key := msg.String()
+		isNavigationKey := key == "up" || key == "k" || key == "down" || key == "j" ||
+			key == "tab" || key == "enter" || key == "esc"
+
+		if !isNavigationKey {
+			// Pass to search input for typing
+			m.searchInput.Focus()
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			// Filter branches based on search
+			m.filteredBranches = m.filterBranches(m.searchInput.Value())
+			// Reset branch index when search changes
+			m.branchIndex = 0
+			m.modalFocused = 0 // Ensure we're tracking search as focused
+		}
 	}
 
 	return m, cmd

@@ -482,13 +482,13 @@ func (m Model) renderBranchSelectModal() string {
 	okBtn := "OK"
 	cancelBtn := "Cancel"
 
-	if m.modalFocused == 1 {
+	if m.modalFocused == 2 {
 		b.WriteString(selectedButtonStyle.Render(okBtn))
 	} else {
 		b.WriteString(buttonStyle.Render(okBtn))
 	}
 
-	if m.modalFocused == 2 {
+	if m.modalFocused == 3 {
 		b.WriteString(selectedCancelButtonStyle.Render(cancelBtn))
 	} else {
 		b.WriteString(cancelButtonStyle.Render(cancelBtn))
