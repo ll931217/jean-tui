@@ -42,6 +42,7 @@ const (
 	themeSelectModal
 	aiSettingsModal
 	prContentModal
+	prListModal
 )
 
 // NotificationType defines the type of notification
@@ -162,6 +163,9 @@ type Model struct {
 	// PR content modal AI generation state
 	generatingPRContent bool // Whether we're currently generating PR content
 	prSpinnerFrame      int  // Current spinner animation frame for PR modal (0-9)
+
+	// PR list modal state
+	prListIndex int // Selected PR index in the PR list modal
 }
 
 // NewModel creates a new TUI model
@@ -452,6 +456,10 @@ type (
 		worktreePath string
 		branch       string
 		err          error
+	}
+
+	prStatusesRefreshedMsg struct {
+		err error
 	}
 )
 
@@ -902,6 +910,39 @@ func (m Model) testOpenRouterAPIKey(apiKey, model string) tea.Cmd {
 		}
 
 		return apiKeyTestedMsg{success: true, err: nil}
+	}
+}
+
+// refreshPRStatuses refreshes the status of all PRs for the selected worktree
+func (m Model) refreshPRStatuses() tea.Cmd {
+	return func() tea.Msg {
+		if m.selectedIndex < 0 || m.selectedIndex >= len(m.worktrees) {
+			return prStatusesRefreshedMsg{err: fmt.Errorf("no worktree selected")}
+		}
+
+		worktree := m.worktrees[m.selectedIndex]
+		prs := m.configManager.GetPRs(m.repoPath, worktree.Branch)
+
+		// Update the status of each PR
+		for _, pr := range prs {
+			status, err := m.githubManager.GetPRStatus(pr.URL)
+			if err == nil {
+				_ = m.configManager.UpdatePRStatus(m.repoPath, worktree.Branch, pr.URL, status)
+			}
+		}
+
+		// Reload worktrees to get updated PR info
+		worktrees, err := m.gitManager.List(m.baseBranch)
+		if err != nil {
+			return prStatusesRefreshedMsg{err: err}
+		}
+
+		// Load PR info into worktrees
+		for i := range worktrees {
+			worktrees[i].PRs = m.configManager.GetPRs(m.repoPath, worktrees[i].Branch)
+		}
+
+		return prStatusesRefreshedMsg{err: nil}
 	}
 }
 

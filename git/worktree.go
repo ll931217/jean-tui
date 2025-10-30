@@ -17,10 +17,11 @@ type Worktree struct {
 	Branch          string
 	Commit          string
 	IsCurrent       bool
-	BehindCount     int  // Commits behind base branch
-	AheadCount      int  // Commits ahead of base branch
-	IsOutdated      bool // Convenience flag: true if behind > 0
-	HasUncommitted  bool // Whether the worktree has uncommitted changes
+	BehindCount     int              // Commits behind base branch
+	AheadCount      int              // Commits ahead of base branch
+	IsOutdated      bool             // Convenience flag: true if behind > 0
+	HasUncommitted  bool             // Whether the worktree has uncommitted changes
+	PRs             interface{}      // []config.PRInfo - Pull requests for this branch (loaded from config)
 }
 
 // Manager handles Git worktree operations

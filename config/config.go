@@ -18,13 +18,22 @@ type Config struct {
 	AIBranchNameEnabled bool                   `json:"ai_branch_name_enabled,omitempty"` // Enable AI branch name generation
 }
 
+// PRInfo represents information about a pull request
+type PRInfo struct {
+	URL       string `json:"url"`
+	Status    string `json:"status"` // "open", "merged", or "closed"
+	CreatedAt string `json:"created_at,omitempty"` // RFC3339 format
+	Branch    string `json:"branch"`
+}
+
 // RepoConfig represents configuration for a specific repository
 type RepoConfig struct {
-	BaseBranch         string `json:"base_branch"`
-	LastSelectedBranch string `json:"last_selected_branch,omitempty"`
-	Editor             string `json:"editor,omitempty"`
-	AutoFetchInterval  int    `json:"auto_fetch_interval,omitempty"` // in seconds, 0 = use default (10s)
-	Theme              string `json:"theme,omitempty"`               // Per-repo theme override, "" = use global default
+	BaseBranch         string            `json:"base_branch"`
+	LastSelectedBranch string            `json:"last_selected_branch,omitempty"`
+	Editor             string            `json:"editor,omitempty"`
+	AutoFetchInterval  int               `json:"auto_fetch_interval,omitempty"` // in seconds, 0 = use default (10s)
+	Theme              string            `json:"theme,omitempty"`               // Per-repo theme override, "" = use global default
+	PRs                map[string][]PRInfo `json:"prs,omitempty"`                 // branch -> list of PRs
 }
 
 // Manager handles configuration loading and saving
@@ -293,4 +302,90 @@ func (m *Manager) GetAIBranchNameEnabled() bool {
 func (m *Manager) SetAIBranchNameEnabled(enabled bool) error {
 	m.config.AIBranchNameEnabled = enabled
 	return m.save()
+}
+
+// GetPRs returns all pull requests for a given branch
+func (m *Manager) GetPRs(repoPath, branch string) []PRInfo {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		if repo.PRs != nil {
+			if prs, ok := repo.PRs[branch]; ok {
+				return prs
+			}
+		}
+	}
+	return []PRInfo{}
+}
+
+// AddPR adds a pull request for a given branch
+func (m *Manager) AddPR(repoPath, branch, url string) error {
+	if m.config.Repositories == nil {
+		m.config.Repositories = make(map[string]*RepoConfig)
+	}
+
+	if _, ok := m.config.Repositories[repoPath]; !ok {
+		m.config.Repositories[repoPath] = &RepoConfig{}
+	}
+
+	repo := m.config.Repositories[repoPath]
+	if repo.PRs == nil {
+		repo.PRs = make(map[string][]PRInfo)
+	}
+
+	// Check if PR already exists
+	for _, pr := range repo.PRs[branch] {
+		if pr.URL == url {
+			return nil // Already exists
+		}
+	}
+
+	// Add new PR with "open" status by default
+	prInfo := PRInfo{
+		URL:    url,
+		Status: "open",
+		Branch: branch,
+	}
+	repo.PRs[branch] = append(repo.PRs[branch], prInfo)
+	return m.save()
+}
+
+// UpdatePRStatus updates the status of a pull request
+func (m *Manager) UpdatePRStatus(repoPath, branch, url, status string) error {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		if repo.PRs != nil {
+			if prs, ok := repo.PRs[branch]; ok {
+				for i, pr := range prs {
+					if pr.URL == url {
+						prs[i].Status = status
+						return m.save()
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// RemovePR removes a pull request
+func (m *Manager) RemovePR(repoPath, branch, url string) error {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		if repo.PRs != nil {
+			if prs, ok := repo.PRs[branch]; ok {
+				newPRs := []PRInfo{}
+				for _, pr := range prs {
+					if pr.URL != url {
+						newPRs = append(newPRs, pr)
+					}
+				}
+				repo.PRs[branch] = newPRs
+				return m.save()
+			}
+		}
+	}
+	return nil
+}
+
+// HasPRs checks if there are any pull requests for a given branch
+func (m *Manager) HasPRs(repoPath, branch string) bool {
+	prs := m.GetPRs(repoPath, branch)
+	return len(prs) > 0
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/coollabsio/gcool/config"
 )
 
 // View renders the TUI
@@ -200,6 +201,48 @@ func (m Model) renderDetails() string {
 		}
 	}
 
+	// Show PR status
+	if prs, ok := wt.PRs.([]config.PRInfo); ok && len(prs) > 0 {
+		b.WriteString("\n")
+		b.WriteString(detailKeyStyle.Render("Pull Requests:"))
+		b.WriteString("\n")
+		for i, pr := range prs {
+			// Determine status emoji
+			statusEmoji := "🟢"
+			statusColor := successColor
+			switch pr.Status {
+			case "merged":
+				statusEmoji = "🟣"
+				statusColor = successColor
+			case "closed":
+				statusEmoji = "⚫"
+				statusColor = warningColor
+			}
+
+			// Extract PR number from URL if possible (last part of URL)
+			prDisplay := pr.URL
+			if strings.Contains(pr.URL, "/pull/") {
+				parts := strings.Split(pr.URL, "/pull/")
+				if len(parts) > 1 {
+					prNum := strings.Split(parts[1], "/")[0]
+					prDisplay = "#" + prNum
+				}
+			}
+
+			b.WriteString("  ")
+			b.WriteString(normalItemStyle.Copy().Foreground(statusColor).Render(statusEmoji))
+			b.WriteString(" ")
+			// Render PR as underlined text with OSC 8 hyperlink support for modern terminals
+			styledPR := normalItemStyle.Copy().Foreground(accentColor).Underline(true).Render(prDisplay)
+			// Add OSC 8 hyperlink codes around the styled text
+			b.WriteString(fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", pr.URL, styledPR))
+			if i < len(prs)-1 {
+				b.WriteString(",")
+			}
+			b.WriteString("\n")
+		}
+	}
+
 	// Add action hints
 	b.WriteString("\n")
 	b.WriteString(detailKeyStyle.Render("Actions:"))
@@ -338,6 +381,8 @@ func (m Model) renderModal() string {
 		return m.renderCommitModal()
 	case prContentModal:
 		return m.renderPRContentModal()
+	case prListModal:
+		return m.renderPRListModal()
 	case helperModal:
 		return m.renderHelperModal()
 	}
@@ -1071,6 +1116,64 @@ func (m Model) renderPRContentModal() string {
 	)
 }
 
+func (m Model) renderPRListModal() string {
+	var b strings.Builder
+
+	wt := m.selectedWorktree()
+	if wt == nil {
+		return ""
+	}
+
+	prs, ok := wt.PRs.([]config.PRInfo)
+	if !ok || len(prs) == 0 {
+		return ""
+	}
+
+	b.WriteString(modalTitleStyle.Render("Select Pull Request"))
+	b.WriteString("\n\n")
+
+	// Show PRs list
+	for i, pr := range prs {
+		// Determine status indicator
+		statusEmoji := "🟢"
+		switch pr.Status {
+		case "merged":
+			statusEmoji = "🟣"
+		case "closed":
+			statusEmoji = "⚫"
+		}
+
+		// Extract PR number from URL
+		prDisplay := pr.URL
+		if strings.Contains(pr.URL, "/pull/") {
+			parts := strings.Split(pr.URL, "/pull/")
+			if len(parts) > 1 {
+				prNum := strings.Split(parts[1], "/")[0]
+				prDisplay = "#" + prNum
+			}
+		}
+
+		// Format the line
+		line := fmt.Sprintf("%s %s", statusEmoji, prDisplay)
+
+		if i == m.prListIndex {
+			b.WriteString(selectedItemStyle.Render("› " + line))
+		} else {
+			b.WriteString(normalItemStyle.Render("  " + line))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("↑↓/jk navigate • Enter to open • Esc to cancel"))
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		modalStyle.Render(b.String()),
+	)
+}
+
 func (m Model) renderEditorSelectModal() string {
 	var b strings.Builder
 
@@ -1502,6 +1605,7 @@ func (m Model) renderHelperModal() string {
 				{"C", "Commit all uncommitted changes"},
 				{"p", "Merge base branch into current worktree"},
 				{"P", "Push & create draft PR"},
+				{"v", "Open PR in browser"},
 				{"r", "Refresh status (fetch from remote, no merging)"},
 				{"R", "Rename current branch"},
 			},

@@ -82,3 +82,16 @@ func (m *Manager) GetRepoName(worktreePath string) (string, error) {
 	}
 	return strings.TrimSpace(string(output)), nil
 }
+
+// GetPRStatus gets the current status of a pull request
+func (m *Manager) GetPRStatus(prURL string) (string, error) {
+	cmd := exec.Command("gh", "pr", "view", prURL, "--json", "state", "--jq", ".state")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to get PR status: %s", string(output))
+	}
+
+	// The output will be one of: OPEN, MERGED, CLOSED
+	status := strings.ToLower(strings.TrimSpace(string(output)))
+	return status, nil
+}

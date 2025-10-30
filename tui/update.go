@@ -2,10 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/coollabsio/gcool/config"
 	"github.com/coollabsio/gcool/git"
 )
 
@@ -35,6 +37,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		} else {
 			m.worktrees = msg.worktrees
+
+			// Load PRs from config for each worktree
+			for i := range m.worktrees {
+				if m.configManager != nil {
+					prs := m.configManager.GetPRs(m.repoPath, m.worktrees[i].Branch)
+					m.worktrees[i].PRs = prs
+				}
+			}
 
 			// If we just created a worktree, select it
 			if m.lastCreatedBranch != "" {
@@ -174,6 +184,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = m.showErrorNotification("Failed to create PR: " + msg.err.Error(), 4*time.Second)
 			return m, cmd
 		} else {
+			// Find the worktree branch for this PR
+			var prBranch string
+			for _, wt := range m.worktrees {
+				if wt.Path == msg.prURL || len(m.worktrees) == 1 {
+					// Try to find the worktree by comparing with current selection
+					if sel := m.selectedWorktree(); sel != nil && sel.Path == wt.Path {
+						prBranch = wt.Branch
+						break
+					}
+				}
+			}
+
+			// If we have a selected worktree, use its branch
+			if prBranch == "" {
+				if sel := m.selectedWorktree(); sel != nil {
+					prBranch = sel.Branch
+				}
+			}
+
+			// Save PR to config
+			if prBranch != "" {
+				_ = m.configManager.AddPR(m.repoPath, prBranch, msg.prURL)
+			}
+
 			cmd = m.showSuccessNotification("Draft PR created: " + msg.prURL, 5*time.Second)
 			// Refresh worktree list to update status after PR creation
 			return m, tea.Batch(cmd, m.loadWorktrees)
@@ -184,6 +218,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// AI generation failed - fall back to current name (graceful degradation)
 			cmd = m.showWarningNotification("Using current branch name for PR...")
+			// Still try to generate PR content with AI
+			hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+			aiContentEnabled := m.configManager != nil && m.configManager.GetAICommitEnabled()
+			if hasAPIKey && aiContentEnabled {
+				return m, tea.Batch(cmd, m.generatePRContent(msg.worktreePath, msg.oldBranchName, m.baseBranch))
+			}
 			return m, tea.Batch(cmd, m.createPR(msg.worktreePath, msg.oldBranchName, "", ""))
 		}
 
@@ -192,6 +232,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if targetExists {
 			// Target branch already exists - skip rename and use current name for PR
 			cmd = m.showWarningNotification("Branch name already exists, using current name...")
+			// Still try to generate PR content with AI
+			hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+			aiContentEnabled := m.configManager != nil && m.configManager.GetAICommitEnabled()
+			if hasAPIKey && aiContentEnabled {
+				return m, tea.Batch(cmd, m.generatePRContent(msg.worktreePath, msg.oldBranchName, m.baseBranch))
+			}
 			return m, tea.Batch(cmd, m.createPR(msg.worktreePath, msg.oldBranchName, "", ""))
 		}
 
@@ -225,6 +271,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if targetExists {
 			// Target branch already exists - skip rename and use current name for PR
 			cmd = m.showWarningNotification("Branch name already exists, using current name...")
+			// Still try to generate PR content with AI
+			hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+			aiContentEnabled := m.configManager != nil && m.configManager.GetAICommitEnabled()
+			if hasAPIKey && aiContentEnabled {
+				return m, tea.Batch(cmd, m.generatePRContent(msg.worktreePath, msg.oldBranchName, m.baseBranch))
+			}
 			return m, tea.Batch(cmd, m.createPR(msg.worktreePath, msg.oldBranchName, "", ""))
 		}
 
@@ -301,29 +353,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 
-				// Open PR content modal
-				m.modal = prContentModal
-				m.prModalFocused = 0
-				m.prModalWorktreePath = m.prCreationPending
-				m.prModalBranch = branch
-
-				// Default title to branch name
-				defaultTitle := strings.ReplaceAll(branch, "-", " ")
-				defaultTitle = strings.ReplaceAll(defaultTitle, "_", " ")
-				defaultTitle = strings.Title(defaultTitle)
-				m.prTitleInput.SetValue(defaultTitle)
-				m.prTitleInput.Focus()
-				m.prDescriptionInput.SetValue("")
-
 				// Reset commit before PR flag
 				m.commitBeforePR = false
-				m.prCreationPending = ""
 
-				// Refresh worktree list and show PR modal
-				return m, tea.Batch(
-					cmd,
-					m.loadWorktrees,
-				)
+				// Check if we should do AI renaming
+				hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+				aiEnabled := m.configManager != nil && m.configManager.GetAIBranchNameEnabled()
+				isRandomName := m.gitManager.IsRandomBranchName(branch)
+				shouldAIRename := hasAPIKey && aiEnabled && isRandomName
+
+				if shouldAIRename {
+					// Start AI rename flow before PR creation
+					cmd = m.showInfoNotification("🤖 Generating semantic branch name...")
+					return m, tea.Batch(cmd, m.generateBranchNameForPR(m.prCreationPending, branch, m.baseBranch))
+				} else {
+					// No AI rename needed, go straight to generating PR content
+					cmd = m.showInfoNotification("🤖 Generating PR content...")
+					return m, tea.Batch(cmd, m.generatePRContent(m.prCreationPending, branch, m.baseBranch))
+				}
 			}
 
 			// Normal commit (not before PR) - just refresh worktree list
@@ -444,6 +491,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 
+	case prStatusesRefreshedMsg:
+		if msg.err != nil {
+			// Silently handle PR status refresh errors
+			return m, m.loadWorktrees
+		}
+		// Reload worktrees to show updated PR statuses
+		return m, m.loadWorktrees
+
 	case activityTickMsg:
 		// Check if enough time has passed since last activity check
 		if time.Since(m.lastActivityCheck) >= m.activityCheckInterval {
@@ -465,12 +520,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case commitMessageGeneratedMsg:
 		m.generatingCommit = false // Stop spinner animation
 		if msg.err != nil {
+			// If in PR creation flow, show error and abort
+			if m.commitBeforePR {
+				m.commitBeforePR = false
+				cmd := m.showErrorNotification("Failed to generate commit message: " + msg.err.Error(), 4*time.Second)
+				return m, cmd
+			}
 			// Set status message in commit modal
 			m.commitModalStatus = "❌ Error: " + msg.err.Error()
 			m.commitModalStatusTime = time.Now()
 			return m, nil
 		} else {
-			// Populate the commit message fields with AI-generated content
+			// If in PR creation flow, auto-commit with generated message
+			if m.commitBeforePR {
+				cmd := m.showInfoNotification("Committing with AI-generated message...")
+				return m, tea.Batch(cmd, m.createCommit(m.prCreationPending, msg.subject, msg.body))
+			}
+			// Otherwise populate the commit message fields with AI-generated content for user review
 			m.commitSubjectInput.SetValue(msg.subject)
 			m.commitBodyInput.SetValue(msg.body)
 			// Set success status message
@@ -561,7 +627,7 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		cmd = m.showInfoNotification("Pulling latest commits and refreshing...")
-		return m, tea.Batch(cmd, m.refreshWithPull())
+		return m, tea.Batch(cmd, m.refreshWithPull(), m.refreshPRStatuses())
 
 	case "n":
 		// Instantly create worktree with random branch name from base branch
@@ -644,6 +710,12 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if !strings.Contains(wt.Path, ".workspaces") {
 				return m, m.showWarningNotification("Cannot rename main branch. Only workspace branches can be renamed.")
 			}
+
+			// Check if this branch has PRs
+			if m.configManager != nil && m.configManager.HasPRs(m.repoPath, wt.Branch) {
+				return m, m.showErrorNotification("Cannot rename branch with existing PRs. Delete PRs first or close them manually.", 5*time.Second)
+			}
+
 			m.modal = renameModal
 			m.modalFocused = 0
 			m.nameInput.SetValue(wt.Branch)
@@ -784,21 +856,27 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 			// If there are uncommitted changes, decide how to handle them
 			if hasUncommitted {
-				if hasAI {
-					// AI is enabled - auto-commit silently and proceed
-					cmd = m.showInfoNotification("Committing changes...")
-					return m, tea.Batch(cmd, m.autoCommitBeforePR(wt.Path, wt.Branch))
-				} else {
-					// No AI - show commit modal for user to write proper commit message
-					m.modal = commitModal
-					m.modalFocused = 0
-					m.commitSubjectInput.SetValue("")
-					m.commitSubjectInput.Focus()
-					m.commitBodyInput.SetValue("")
-					m.commitBeforePR = true
-					m.prCreationPending = wt.Path
-					return m, nil
-				}
+				if hasAI && aiContentEnabled {
+				// AI is enabled for commit messages - generate commit message with AI first
+				cmd = m.showInfoNotification("🤖 Generating commit message...")
+				m.commitBeforePR = true
+				m.prCreationPending = wt.Path
+				return m, tea.Batch(cmd, m.generateCommitMessageWithAI(wt.Path))
+			} else if hasAI {
+				// AI is enabled for branch/PR but not commit - auto-commit with simple message and proceed
+				cmd = m.showInfoNotification("Committing changes...")
+				return m, tea.Batch(cmd, m.autoCommitBeforePR(wt.Path, wt.Branch))
+			} else {
+				// No AI - show commit modal for user to write proper commit message
+				m.modal = commitModal
+				m.modalFocused = 0
+				m.commitSubjectInput.SetValue("")
+				m.commitSubjectInput.Focus()
+				m.commitBodyInput.SetValue("")
+				m.commitBeforePR = true
+				m.prCreationPending = wt.Path
+				return m, nil
+			}
 			}
 
 			// No uncommitted changes - proceed to PR creation
@@ -836,6 +914,29 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.commitBodyInput.SetValue("")
 			m.commitModalStatus = "" // Clear any previous status
 			return m, nil
+		}
+
+	case "v":
+		// Open PR in browser - if multiple PRs exist, show selection modal
+		if wt := m.selectedWorktree(); wt != nil {
+			if prs, ok := wt.PRs.([]config.PRInfo); ok && len(prs) > 0 {
+				if len(prs) == 1 {
+					// Only one PR - open it directly
+					cmd := exec.Command("gh", "pr", "view", prs[0].URL, "--web")
+					err := cmd.Start()
+					if err != nil {
+						return m, m.showErrorNotification("Failed to open PR in browser: "+err.Error(), 3*time.Second)
+					}
+					return m, m.showSuccessNotification("Opening PR in browser...", 2*time.Second)
+				} else {
+					// Multiple PRs - show selection modal
+					m.modal = prListModal
+					m.prListIndex = len(prs) - 1 // Default to most recent
+					return m, nil
+				}
+			} else {
+				return m, m.showInfoNotification("No PRs found for this worktree")
+			}
 		}
 
 	case "h":
@@ -892,6 +993,9 @@ func (m Model) handleModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case prContentModal:
 		return m.handlePRContentModalInput(msg)
+
+	case prListModal:
+		return m.handlePRListModalInput(msg)
 
 	case helperModal:
 		return m.handleHelperModalInput(msg)
@@ -1542,6 +1646,54 @@ func (m Model) handlePRContentModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, cmd
+}
+
+func (m Model) handlePRListModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	wt := m.selectedWorktree()
+	if wt == nil {
+		m.modal = noModal
+		return m, nil
+	}
+
+	prs, ok := wt.PRs.([]config.PRInfo)
+	if !ok || len(prs) == 0 {
+		m.modal = noModal
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "esc":
+		m.modal = noModal
+		return m, nil
+
+	case "up", "k":
+		if m.prListIndex > 0 {
+			m.prListIndex--
+		}
+		return m, nil
+
+	case "down", "j":
+		if m.prListIndex < len(prs)-1 {
+			m.prListIndex++
+		}
+		return m, nil
+
+	case "enter":
+		// Open selected PR in browser
+		if m.prListIndex >= 0 && m.prListIndex < len(prs) {
+			selectedPR := prs[m.prListIndex]
+			cmd := exec.Command("gh", "pr", "view", selectedPR.URL, "--web")
+			err := cmd.Start()
+			if err != nil {
+				m.modal = noModal
+				return m, m.showErrorNotification("Failed to open PR in browser: "+err.Error(), 3*time.Second)
+			}
+			m.modal = noModal
+			return m, m.showSuccessNotification("Opening PR in browser...", 2*time.Second)
+		}
+	}
+
+	return m, nil
 }
 
 func (m Model) handleEditorSelectModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
