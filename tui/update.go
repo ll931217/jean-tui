@@ -1357,8 +1357,8 @@ func (m Model) handleRenameModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "g":
-		// AI-generate branch name from changes
-		if m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != "" {
+		// AI-generate branch name (only when focused on buttons, not input field)
+		if m.modalFocused > 0 && m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != "" {
 			if wt := m.selectedWorktree(); wt != nil {
 				m.generatingRename = true
 				m.renameSpinnerFrame = 0
@@ -1369,7 +1369,7 @@ func (m Model) handleRenameModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				)
 			}
 		}
-		return m, nil
+		// If in input field (modalFocused == 0), fall through to handle text input
 
 	case "tab", "shift+tab":
 		// Toggle between input and buttons
