@@ -1728,33 +1728,56 @@ func (m Model) handleEditorSelectModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 }
 
 func (m Model) handleThemeSelectModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	config := listSelectionConfig{
-		getCurrentIndex: func() int { return m.themeIndex },
-		getItemCount:    func(m Model) int { return len(m.availableThemes) },
-		incrementIndex:  func(m *Model) { m.themeIndex++ },
-		decrementIndex:  func(m *Model) { m.themeIndex-- },
-		onConfirm: func(m Model) (tea.Model, tea.Cmd) {
-			if m.themeIndex >= 0 && m.themeIndex < len(m.availableThemes) {
-				selectedTheme := m.availableThemes[m.themeIndex]
-				// Convert theme name to lowercase for config
-				themeName := strings.ToLower(selectedTheme.Name)
-				cmd := m.changeTheme(themeName)
-				m.modal = settingsModal
-				m.settingsIndex = 1
-				return m, cmd
+	switch msg.String() {
+	case "esc", "q":
+		// Revert to original theme when cancelling
+		if m.originalTheme != "" {
+			ApplyTheme(m.originalTheme)
+		}
+		m.modal = settingsModal
+		m.settingsIndex = 1
+		return m, nil
+
+	case "up", "k":
+		if m.themeIndex > 0 {
+			m.themeIndex--
+			// Apply theme preview immediately
+			selectedTheme := m.availableThemes[m.themeIndex]
+			themeName := strings.ToLower(selectedTheme.Name)
+			if err := ApplyTheme(themeName); err == nil {
+				// Theme applied successfully, UI will refresh with new colors
 			}
+		}
+		return m, nil
+
+	case "down", "j":
+		if m.themeIndex < len(m.availableThemes)-1 {
+			m.themeIndex++
+			// Apply theme preview immediately
+			selectedTheme := m.availableThemes[m.themeIndex]
+			themeName := strings.ToLower(selectedTheme.Name)
+			if err := ApplyTheme(themeName); err == nil {
+				// Theme applied successfully, UI will refresh with new colors
+			}
+		}
+		return m, nil
+
+	case "enter":
+		// Save the selected theme
+		if m.themeIndex >= 0 && m.themeIndex < len(m.availableThemes) {
+			selectedTheme := m.availableThemes[m.themeIndex]
+			themeName := strings.ToLower(selectedTheme.Name)
+			cmd := m.changeTheme(themeName)
 			m.modal = settingsModal
 			m.settingsIndex = 1
-			return m, nil
-		},
-		onCancel: func(m Model) (tea.Model, tea.Cmd) {
-			// Return to settings modal
-			m.modal = settingsModal
-			m.settingsIndex = 1
-			return m, nil
-		},
+			return m, cmd
+		}
+		m.modal = settingsModal
+		m.settingsIndex = 1
+		return m, nil
 	}
-	return m.handleListSelectionModalInput(msg, config)
+
+	return m, nil
 }
 
 func (m Model) handleSettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1829,6 +1852,11 @@ func (m Model) handleSettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.modal = themeSelectModal
 			m.modalFocused = 0
 			m.themeIndex = 0
+
+			// Store original theme for preview revert
+			if m.configManager != nil {
+				m.originalTheme = m.configManager.GetTheme(m.repoPath)
+			}
 
 			// Find current theme in the list
 			if m.configManager != nil {

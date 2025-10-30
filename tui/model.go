@@ -118,9 +118,10 @@ type Model struct {
 	createNewBranch        bool
 	editorIndex            int      // Selected editor index
 	editors                []string // List of available editors
-	themeIndex      int           // Selected theme index
-	availableThemes []ThemeInfo   // List of available themes
-	settingsIndex   int           // Selected setting option index
+	themeIndex             int      // Selected theme index
+	availableThemes        []ThemeInfo   // List of available themes
+	originalTheme          string        // Original theme before entering theme selection modal (for preview revert)
+	settingsIndex          int           // Selected setting option index
 	deleteHasUncommitted   bool     // Whether worktree to delete has uncommitted changes
 	deleteConfirmForce     bool     // User acknowledged they want to delete despite uncommitted changes
 
