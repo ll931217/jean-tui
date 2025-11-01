@@ -202,6 +202,10 @@ type Model struct {
 	prRetryTitle        string // Generated title for PR retry
 	prRetryDescription  string // Generated description for PR retry
 	prRetryInProgress   bool   // Whether we're already in a retry attempt (prevent infinite loops)
+
+	// Worktree switch state (for ensuring worktree exists before switching)
+	pendingSwitchInfo   *SwitchInfo // Info for pending switch (will be completed after ensure succeeds)
+	ensuringWorktree    bool        // Whether we're currently ensuring a worktree exists
 }
 
 // NewModel creates a new TUI model
@@ -545,6 +549,10 @@ type (
 		branch string
 		err    error
 	}
+
+	worktreeEnsuredMsg struct {
+		err error
+	}
 )
 
 // Commands
@@ -603,6 +611,13 @@ func (m Model) deleteWorktree(path, branch string, force bool) tea.Cmd {
 		_ = m.sessionManager.Kill(terminalSessionName) // Ignore error if session doesn't exist
 
 		return worktreeDeletedMsg{err: nil}
+	}
+}
+
+func (m Model) ensureWorktreeExists(worktreePath, branch string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.gitManager.EnsureWorktreeExists(worktreePath, branch)
+		return worktreeEnsuredMsg{err: err}
 	}
 }
 

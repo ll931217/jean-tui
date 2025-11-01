@@ -1195,7 +1195,7 @@ func (m Model) renderPRListModal() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("↑↓/jk navigate • Enter to open • Esc to cancel"))
+	b.WriteString(helpStyle.Render("↑↓ navigate • Enter to open • Esc to cancel"))
 
 	return lipgloss.Place(
 		m.width, m.height,
@@ -1230,7 +1230,7 @@ func (m Model) renderEditorSelectModal() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("↑↓/jk navigate • Enter to select • Esc to cancel"))
+	b.WriteString(helpStyle.Render("↑↓ navigate • Enter to select • Esc to cancel"))
 
 	return lipgloss.Place(
 		m.width, m.height,
@@ -1264,7 +1264,7 @@ func (m Model) renderThemeSelectModal() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("↑↓/jk navigate • Enter to select • Esc to cancel"))
+	b.WriteString(helpStyle.Render("↑↓ navigate • Enter to select • Esc to cancel"))
 
 	return lipgloss.Place(
 		m.width, m.height,
@@ -1359,7 +1359,7 @@ func (m Model) renderSettingsModal() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("↑↓/jk navigate • Enter to configure • Esc to close"))
+	b.WriteString(helpStyle.Render("↑↓ navigate • Enter to configure • Esc to close"))
 
 	return lipgloss.Place(
 		m.width, m.height,

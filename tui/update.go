@@ -840,6 +840,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.animateRenameSpinner()
 		}
 		return m, nil
+
+	case worktreeEnsuredMsg:
+		m.ensuringWorktree = false
+		if msg.err != nil {
+			cmd = m.showErrorNotification(fmt.Sprintf("Failed to ensure worktree exists: %v", msg.err), 4*time.Second)
+			m.pendingSwitchInfo = nil
+			return m, cmd
+		}
+		// Worktree is now ensured to exist, proceed with switch
+		if m.pendingSwitchInfo != nil {
+			m.switchInfo = *m.pendingSwitchInfo
+			m.pendingSwitchInfo = nil
+			return m, tea.Quit
+		}
 	}
 
 	return m, cmd
@@ -851,7 +865,7 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 
-	case "up", "k":
+	case "up":
 		if m.selectedIndex > 0 {
 			m.selectedIndex--
 			// Save the last selected branch
@@ -860,7 +874,7 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case "down", "j":
+	case "down":
 		if m.selectedIndex < len(m.worktrees)-1 {
 			m.selectedIndex++
 			// Save the last selected branch
@@ -983,13 +997,16 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.configManager != nil {
 				_ = m.configManager.SetLastSelectedBranch(m.repoPath, wt.Branch)
 			}
-			m.switchInfo = SwitchInfo{
+			// Store pending switch info and ensure worktree exists
+			m.pendingSwitchInfo = &SwitchInfo{
 				Path:         wt.Path,
 				Branch:       wt.Branch,
 				AutoClaude:   m.autoClaude,
 				TerminalOnly: false, // Explicitly use Claude session, not terminal-only
 			}
-			return m, tea.Quit
+			m.ensuringWorktree = true
+			cmd = m.showInfoNotification("Preparing workspace...")
+			return m, tea.Batch(cmd, m.ensureWorktreeExists(wt.Path, wt.Branch))
 		}
 
 	case "B":
@@ -1059,14 +1076,17 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.configManager != nil {
 				_ = m.configManager.SetLastSelectedBranch(m.repoPath, wt.Branch)
 			}
-			m.switchInfo = SwitchInfo{
+			// Store pending switch info and ensure worktree exists
+			m.pendingSwitchInfo = &SwitchInfo{
 				Path:         wt.Path,
 				Branch:       wt.Branch,
 				AutoClaude:   false,        // Never auto-start Claude for terminal
 				TerminalOnly: true,         // Signal this is a terminal session
 			}
-			debugLog("DEBUG: switchInfo set with TerminalOnly=true, quitting")
-			return m, tea.Quit
+			m.ensuringWorktree = true
+			debugLog("DEBUG: ensuring worktree exists before opening terminal")
+			cmd = m.showInfoNotification("Preparing workspace...")
+			return m, tea.Batch(cmd, m.ensureWorktreeExists(wt.Path, wt.Branch))
 		}
 		debugLog("DEBUG: 't' pressed but no worktree selected")
 
@@ -1387,7 +1407,7 @@ func (m Model) handleSearchBasedModalInput(msg tea.KeyMsg, config searchModalCon
 		m.modal = noModal
 		return m, nil
 
-	case "up", "k":
+	case "up":
 		if m.modalFocused == 0 {
 			// In search input, move focus to list
 			m.modalFocused = 1
@@ -1398,7 +1418,7 @@ func (m Model) handleSearchBasedModalInput(msg tea.KeyMsg, config searchModalCon
 		}
 		return m, nil
 
-	case "down", "j":
+	case "down":
 		if m.modalFocused == 0 {
 			// In search input, move focus to list
 			m.modalFocused = 1
@@ -1453,7 +1473,7 @@ func (m Model) handleSearchBasedModalInput(msg tea.KeyMsg, config searchModalCon
 	if m.modalFocused == 0 || m.modalFocused == 1 {
 		// Check if this is a navigation key that's already been handled
 		key := msg.String()
-		isNavigationKey := key == "up" || key == "k" || key == "down" || key == "j" ||
+		isNavigationKey := key == "up" || key == "down" ||
 			key == "tab" || key == "enter" || key == "esc"
 
 		if !isNavigationKey {
@@ -1483,13 +1503,13 @@ func (m Model) handleListSelectionModalInput(msg tea.KeyMsg, config listSelectio
 		m.modal = noModal
 		return m, nil
 
-	case "up", "k":
+	case "up":
 		if config.getCurrentIndex() > 0 {
 			config.decrementIndex(&m)
 		}
 		return m, nil
 
-	case "down", "j":
+	case "down":
 		if config.getCurrentIndex() < config.getItemCount(m)-1 {
 			config.incrementIndex(&m)
 		}
@@ -1595,7 +1615,7 @@ func (m Model) handleDeleteModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = noModal
 		return m, nil
 
-	case "tab", "left", "right", "h", "l":
+	case "tab", "left", "right":
 		// If uncommitted changes, we have 3 buttons (Yes/No/Force), otherwise 2 (Yes/No)
 		if m.deleteHasUncommitted {
 			m.modalFocused = (m.modalFocused + 1) % 3
@@ -2034,13 +2054,13 @@ func (m Model) handlePRListModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = noModal
 		return m, nil
 
-	case "up", "k":
+	case "up":
 		if m.prListIndex > 0 {
 			m.prListIndex--
 		}
 		return m, nil
 
-	case "down", "j":
+	case "down":
 		if m.prListIndex < len(prs)-1 {
 			m.prListIndex++
 		}
@@ -2106,7 +2126,7 @@ func (m Model) handleThemeSelectModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		m.settingsIndex = 1
 		return m, nil
 
-	case "up", "k":
+	case "up":
 		if m.themeIndex > 0 {
 			m.themeIndex--
 			// Apply theme preview immediately
@@ -2118,7 +2138,7 @@ func (m Model) handleThemeSelectModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 		}
 		return m, nil
 
-	case "down", "j":
+	case "down":
 		if m.themeIndex < len(m.availableThemes)-1 {
 			m.themeIndex++
 			// Apply theme preview immediately
@@ -2154,12 +2174,12 @@ func (m Model) handleSettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = noModal
 		return m, nil
 
-	case "up", "k":
+	case "up":
 		if m.settingsIndex > 0 {
 			m.settingsIndex--
 		}
 
-	case "down", "j":
+	case "down":
 		if m.settingsIndex < 4 { // Now 5 settings (editor, theme, base branch, tmux config, AI integration)
 			m.settingsIndex++
 		}
@@ -2298,14 +2318,14 @@ func (m Model) handleAISettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "up", "k":
+	case "up":
 		if m.aiModalFocusedField == 1 && m.aiModelIndex > 0 {
 			// In model selection, move up
 			m.aiModelIndex--
 		}
 		return m, nil
 
-	case "down", "j":
+	case "down":
 		if m.aiModalFocusedField == 1 && m.aiModelIndex < len(m.aiModels)-1 {
 			// In model selection, move down
 			m.aiModelIndex++
@@ -2517,7 +2537,7 @@ func (m Model) handleScriptsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = noModal
 		return m, nil
 
-	case "up", "k":
+	case "up":
 		// Move selection up
 		if m.isViewingRunning {
 			// In running scripts section
@@ -2540,7 +2560,7 @@ func (m Model) handleScriptsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "down", "j":
+	case "down":
 		// Move selection down
 		if m.isViewingRunning {
 			// In running scripts section

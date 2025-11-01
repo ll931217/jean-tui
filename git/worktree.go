@@ -336,6 +336,31 @@ func (m *Manager) Remove(path string, force bool) error {
 	return nil
 }
 
+// EnsureWorktreeExists checks if the worktree directory exists and recreates it if missing
+// This is useful when a worktree has been deleted externally but git still tracks it
+func (m *Manager) EnsureWorktreeExists(path, branch string) error {
+	// Check if the directory exists
+	if _, err := os.Stat(path); err == nil {
+		// Directory exists, nothing to do
+		return nil
+	}
+
+	// Directory doesn't exist, recreate it
+	args := []string{"-C", m.repoPath, "worktree", "add", path, branch}
+	cmd := exec.Command("git", args...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to recreate worktree: %s", string(output))
+	}
+
+	// Execute setup script if configured (non-blocking)
+	if err := m.executeSetupScript(path); err != nil {
+		// Log the error but don't fail - worktree is still usable
+		fmt.Fprintf(os.Stderr, "Warning: setup script failed during worktree recreation: %v\n", err)
+	}
+
+	return nil
+}
+
 // RenameBranch renames the current branch
 func (m *Manager) RenameBranch(oldName, newName string) error {
 	cmd := exec.Command("git", "-C", m.repoPath, "branch", "-m", oldName, newName)
