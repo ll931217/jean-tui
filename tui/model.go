@@ -1347,6 +1347,41 @@ func (m Model) pullFromBaseBranch(worktreePath, baseBranch string) tea.Cmd {
 	}
 }
 
+// checkAndPullFromBase fetches first, then checks if behind, then pulls if needed
+// This ensures we check against actual remote state, not stale cached data
+func (m Model) checkAndPullFromBase(worktreePath, baseBranch string) tea.Cmd {
+	return func() tea.Msg {
+		// First: Fetch to get latest remote refs
+		if err := m.gitManager.FetchRemote(); err != nil {
+			return branchPulledMsg{err: fmt.Errorf("failed to fetch: %w", err)}
+		}
+
+		// Second: Check if actually behind by comparing fresh refs
+		_, behindCount, err := m.gitManager.GetBranchStatus(worktreePath, "", baseBranch)
+		if err != nil {
+			return branchPulledMsg{err: fmt.Errorf("failed to check branch status: %w", err)}
+		}
+
+		// Third: If not behind, inform user
+		if behindCount == 0 {
+			// Not behind - return special message to show in UI
+			return branchPulledMsg{err: fmt.Errorf("worktree is already up-to-date with base branch"), hadConflict: false}
+		}
+
+		// Fourth: Pull if behind
+		err = m.gitManager.MergeBranch(worktreePath, baseBranch)
+		if err != nil {
+			// Check if it's a merge conflict
+			if strings.Contains(err.Error(), "merge conflict") {
+				return branchPulledMsg{err: err, hadConflict: true}
+			}
+			return branchPulledMsg{err: err, hadConflict: false}
+		}
+
+		return branchPulledMsg{err: nil, hadConflict: false}
+	}
+}
+
 // refreshWithPull fetches latest commits and refreshes worktree status
 // For the main repository: fetches AND pulls to update the working directory
 // For workspace worktrees: fetches only (user must explicitly pull via 'u' keybinding)

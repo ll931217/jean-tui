@@ -124,7 +124,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modal = noModal
 				m.lastCreatedBranch = msg.branch
 				// Still refresh worktrees since the worktree was created successfully
-				return m, tea.Batch(cmd, m.loadWorktreesLightweight())
+				return m, tea.Batch(cmd, m.loadWorktrees())
 			} else {
 				// Git worktree creation failed - show error
 				cmd = m.showErrorNotification("Failed to create worktree", 4*time.Second)
@@ -140,7 +140,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Quick refresh without expensive status checks
 			return m, tea.Batch(
 				cmd,
-				m.loadWorktreesLightweight(),
+				m.loadWorktrees(),
 			)
 		}
 
@@ -161,7 +161,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					SessionName: msg.sessionName,
 					AutoClaude: m.autoClaude,
 				}
-				return m, tea.Batch(cmd, m.loadWorktreesLightweight())
+				return m, tea.Batch(cmd, m.loadWorktrees())
 			} else {
 				// Git worktree creation failed - show error
 				cmd = m.showErrorNotification("Failed to create worktree", 4*time.Second)
@@ -185,7 +185,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Quick refresh without expensive status checks
 			return m, tea.Batch(
 				cmd,
-				m.loadWorktreesLightweight(),
+				m.loadWorktrees(),
 			)
 		}
 
@@ -205,7 +205,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Quick refresh without expensive status checks
 			return m, tea.Batch(
 				cmd,
-				m.loadWorktreesLightweight(),
+				m.loadWorktrees(),
 			)
 		}
 
@@ -220,7 +220,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(
 				cmd,
 				m.renameSessionsForBranch(msg.oldBranch, msg.newBranch),
-				m.loadWorktreesLightweight(),
+				m.loadWorktrees(),
 			)
 		}
 
@@ -238,7 +238,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Load worktrees immediately (without status), then fetch in background
 		// Don't call refreshWithPull() initially - just load the list without notifications
 		// The fetch will happen silently on the first worktree load
-		return m, m.loadWorktreesLightweight()
+		return m, m.loadWorktrees()
 
 	case notificationHideMsg:
 		// Only handle if this is the current notification
@@ -747,6 +747,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.hadConflict {
 				// Show error with abort option
 				cmd = m.showWarningNotification("Merge conflict! Run 'git merge --abort' in the worktree to abort.")
+				return m, cmd
+			} else if strings.Contains(msg.err.Error(), "already up-to-date") {
+				// User tried to pull but worktree is already up-to-date (after checking fresh refs)
+				cmd = m.showInfoNotification("Worktree is already up-to-date with base branch")
 				return m, cmd
 			} else {
 				cmd = m.showErrorNotification("Failed to pull from base branch: " + msg.err.Error(), 5*time.Second)
@@ -1278,18 +1282,14 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.showWarningNotification("Base branch not set. Press 'b' to set base branch")
 			}
 
-			// Only allow pull if worktree is behind
-			if !wt.IsOutdated || wt.BehindCount == 0 {
-				return m, m.showInfoNotification("Worktree is already up-to-date with base branch")
-			}
-
 			// Don't allow pull on main worktree
 			if !strings.Contains(wt.Path, ".workspaces") {
 				return m, m.showWarningNotification("Cannot pull on main worktree. Use 'git pull' manually.")
 			}
 
-			cmd = m.showInfoNotification("Pulling changes from base branch...")
-			return m, tea.Batch(cmd, m.pullFromBaseBranch(wt.Path, m.baseBranch))
+			// Fetch and check for updates (don't rely on cached status)
+			cmd = m.showInfoNotification("Checking for updates...")
+			return m, tea.Batch(cmd, m.checkAndPullFromBase(wt.Path, m.baseBranch))
 		}
 
 	case "p":
