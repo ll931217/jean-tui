@@ -114,6 +114,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case prsLoadedMsg:
+		if msg.err != nil {
+			m.prLoadingError = msg.err.Error()
+			cmd = m.showErrorNotification("Failed to load PRs: "+msg.err.Error(), 4*time.Second)
+			return m, cmd
+		} else {
+			m.prs = msg.prs
+			m.filteredPRs = msg.prs
+			m.prListIndex = 0
+			m.prLoadingError = ""
+		}
+		return m, nil
+
 	case worktreeCreatedMsg:
 		if msg.err != nil {
 			// Check if this is a setup script error (warning) or a git error (error)
@@ -1403,41 +1416,14 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "P":
-		// Create draft PR (Shift+P) - only creates PR, no commits or pushes
-		if wt := m.selectedWorktree(); wt != nil {
-			// Check if there are uncommitted changes
-			hasUncommitted, err := m.gitManager.HasUncommittedChanges(wt.Path)
-			if err != nil {
-				return m, m.showErrorNotification("Failed to check for uncommitted changes: "+err.Error(), 3*time.Second)
-			}
-			if hasUncommitted {
-				return m, m.showErrorNotification("Cannot create PR: you have uncommitted changes. Commit them first with 'c'", 4*time.Second)
-			}
-
-			// Check if there are unpushed commits
-			hasUnpushed, err := m.gitManager.HasUnpushedCommits(wt.Path, wt.Branch)
-			if err != nil {
-				return m, m.showErrorNotification("Failed to check for unpushed commits: "+err.Error(), 3*time.Second)
-			}
-			if hasUnpushed {
-				return m, m.showErrorNotification("Cannot create PR: you have unpushed commits. Push them first with 'p'", 4*time.Second)
-			}
-
-			// All clean - proceed to PR creation
-			// Check AI configuration
-			hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
-			aiContentEnabled := m.configManager != nil && m.configManager.GetAICommitEnabled()
-
-			if hasAPIKey && aiContentEnabled {
-				// Generate PR content with AI (title and description from diff)
-				cmd = m.showInfoNotification("🤖 Generating PR content...")
-				return m, tea.Batch(cmd, m.generatePRContent(wt.Path, wt.Branch, m.baseBranch))
-			} else {
-				// Normal PR creation (no AI)
-				cmd = m.showInfoNotification("Creating draft PR...")
-				return m, tea.Batch(cmd, m.createOrUpdatePR(wt.Path, wt.Branch, "", ""))
-			}
-		}
+		// Select existing PR and create worktree from it (Shift+P)
+		m.modal = prListModal
+		m.prListIndex = 0
+		m.prSearchInput.SetValue("")
+		m.prSearchInput.Focus()
+		m.filteredPRs = nil
+		m.prLoadingError = ""
+		return m, m.loadPRs()
 
 	case "c":
 		// Commit changes
@@ -2316,12 +2302,14 @@ func (m Model) handlePRListModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	wt := m.selectedWorktree()
 	if wt == nil {
 		m.modal = noModal
+		m.prListMergeMode = false
 		return m, nil
 	}
 
 	prs, ok := wt.PRs.([]config.PRInfo)
 	if !ok || len(prs) == 0 {
 		m.modal = noModal
+		m.prListMergeMode = false
 		return m, nil
 	}
 
