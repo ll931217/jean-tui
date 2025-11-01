@@ -16,16 +16,17 @@ import (
 
 // Worktree represents a Git worktree
 type Worktree struct {
-	Path            string
-	Branch          string
-	Commit          string
-	IsCurrent       bool
-	BehindCount     int              // Commits behind base branch
-	AheadCount      int              // Commits ahead of base branch
-	IsOutdated      bool             // Convenience flag: true if behind > 0
-	HasUncommitted  bool             // Whether the worktree has uncommitted changes
-	PRs             interface{}      // []config.PRInfo - Pull requests for this branch (loaded from config)
-	LastModified    time.Time        // Last modification time of the worktree directory
+	Path              string
+	Branch            string
+	Commit            string
+	IsCurrent         bool
+	BehindCount       int              // Commits behind base branch
+	AheadCount        int              // Commits ahead of base branch
+	IsOutdated        bool             // Convenience flag: true if behind > 0
+	HasUncommitted    bool             // Whether the worktree has uncommitted changes
+	PRs               interface{}      // []config.PRInfo - Pull requests for this branch (loaded from config)
+	LastModified      time.Time        // Last modification time of the worktree directory
+	ClaudeSessionName string           // Sanitized tmux session name for Claude (e.g., "gcool-feature-add-status")
 }
 
 // Manager handles Git worktree operations

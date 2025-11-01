@@ -1262,7 +1262,7 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = sessionListModal
 		m.modalFocused = 0
 		m.sessionIndex = 0
-		return m, m.loadSessions
+		return m, m.loadSessions()
 
 	case ";":
 		// Open scripts modal
@@ -1925,7 +1925,7 @@ func (m Model) handleSessionListModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) 
 				} else {
 					m.showSuccessNotification("Session killed", 3*time.Second)
 					// Reload sessions
-					return m, m.loadSessions
+					return m, m.loadSessions()
 				}
 			}
 			return m, nil

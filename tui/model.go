@@ -396,6 +396,7 @@ func (m Model) Init() tea.Cmd {
 
 	return tea.Batch(
 		m.loadBaseBranch(),
+		m.loadSessions(),
 		m.scheduleActivityCheck(),
 		m.scheduleClaudeStatusCheck(),
 		m.scheduleClaudeStatusAnimationTick(),
@@ -621,6 +622,10 @@ type (
 func (m Model) loadWorktrees() tea.Cmd {
 	return func() tea.Msg {
 		worktrees, err := m.gitManager.List(m.baseBranch)
+		// Calculate sanitized Claude session names for each worktree
+		for i := range worktrees {
+			worktrees[i].ClaudeSessionName = m.sessionManager.SanitizeName(worktrees[i].Branch)
+		}
 		return worktreesLoadedMsg{worktrees: worktrees, err: err}
 	}
 }
@@ -628,6 +633,10 @@ func (m Model) loadWorktrees() tea.Cmd {
 func (m Model) loadWorktreesLightweight() tea.Cmd {
 	return func() tea.Msg {
 		worktrees, err := m.gitManager.ListLightweight()
+		// Calculate sanitized Claude session names for each worktree
+		for i := range worktrees {
+			worktrees[i].ClaudeSessionName = m.sessionManager.SanitizeName(worktrees[i].Branch)
+		}
 		return worktreesLoadedMsg{worktrees: worktrees, err: err}
 	}
 }
@@ -1313,12 +1322,14 @@ func (m Model) GetConfigManager() *config.Manager {
 }
 
 // loadSessions loads tmux sessions for the current repository only
-func (m Model) loadSessions() tea.Msg {
-	sessions, err := m.sessionManager.List(m.repoPath)
-	if err != nil {
-		return statusMsg("Failed to load sessions")
+func (m Model) loadSessions() tea.Cmd {
+	return func() tea.Msg {
+		sessions, err := m.sessionManager.List(m.repoPath)
+		if err != nil {
+			return statusMsg("Failed to load sessions")
+		}
+		return sessionsLoadedMsg{sessions: sessions}
 	}
-	return sessionsLoadedMsg{sessions: sessions}
 }
 
 type sessionsLoadedMsg struct {

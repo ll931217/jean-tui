@@ -132,8 +132,7 @@ func (m Model) renderWorktreeList() string {
 		}
 
 		// Show Claude status indicator
-		sessionName := fmt.Sprintf("gcool-%s", wt.Branch)
-		if status, exists := m.claudeStatuses[sessionName]; exists {
+		if status, exists := m.claudeStatuses[wt.ClaudeSessionName]; exists {
 			var statusIndicator string
 			if status == session.StatusBusy {
 				// Animated spinner for busy state
@@ -227,8 +226,7 @@ func (m Model) renderDetails() string {
 	}
 
 	// Show Claude status
-	sessionName := fmt.Sprintf("gcool-%s", wt.Branch)
-	if status, exists := m.claudeStatuses[sessionName]; exists {
+	if status, exists := m.claudeStatuses[wt.ClaudeSessionName]; exists {
 		b.WriteString("\n")
 		b.WriteString(detailKeyStyle.Render("Claude Status:"))
 		b.WriteString("\n")
