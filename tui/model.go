@@ -1553,7 +1553,35 @@ func (m Model) scheduleNotificationHide(id int64, duration time.Duration) tea.Cm
 	)
 }
 
-// sortWorktrees sorts the worktree list with root worktree first, then by last modified time (most recent first)
+<<<<<<< HEAD
+// gitRepoOpenedMsg is sent when the git repository is opened in browser
+type gitRepoOpenedMsg struct {
+	err error
+}
+
+// openGitRepo opens the git repository in the default browser
+func (m Model) openGitRepo() tea.Cmd {
+	return func() tea.Msg {
+		selected := m.selectedWorktree()
+		if selected == nil {
+			return gitRepoOpenedMsg{err: fmt.Errorf("no worktree selected")}
+		}
+
+		// Get the branch URL for the selected worktree
+		url, err := m.gitManager.GetBranchRemoteURL(selected.Branch)
+		if err != nil {
+			return gitRepoOpenedMsg{err: err}
+		}
+
+		// Open in browser
+		if err := git.OpenInBrowser(url); err != nil {
+			return gitRepoOpenedMsg{err: err}
+		}
+
+		return gitRepoOpenedMsg{err: nil}
+	}
+=======
+// sortWorktrees sorts the worktree list by last modified time (most recent first)
 func (m *Model) sortWorktrees() {
 	if len(m.worktrees) == 0 {
 		return
@@ -1572,4 +1600,5 @@ func (m *Model) sortWorktrees() {
 		// Otherwise, sort by last modified time (most recent first)
 		return m.worktrees[i].LastModified.After(m.worktrees[j].LastModified)
 	})
+>>>>>>> main
 }
