@@ -33,11 +33,14 @@ Git diff:
 	// The {diff} placeholder will be replaced with the actual git diff
 	DefaultPRPrompt = `Generate a pull request title and release notes style description for these changes.
 
-You must respond with EXACTLY this format (no markdown, no extra text):
-TITLE: [Your title here - max 72 characters, present tense]
-DESCRIPTION: [Your release notes here - see format below]
+Return ONLY valid JSON in this format (no markdown, no extra text):
+{"title": "...", "description": "..."}
 
-Description Format:
+Requirements:
+- title: Required. Max 72 characters. Present tense, user-friendly summary.
+- description: Required. Release notes in markdown format following the structure below.
+
+Description Format (use markdown):
 ## What's Changed
 
 ### Security & Fixes
@@ -56,20 +59,8 @@ Important Guidelines:
 - Focus on user-facing benefits, not implementation details
 - Skip internal refactoring or minor tweaks unless significant
 
-Examples:
-TITLE: Add dark mode support and improve performance
-DESCRIPTION: ## What's Changed
-
-### Improvements
-- New dark mode theme with automatic system preference detection
-- Reduced initial load time by optimizing image loading
-
-TITLE: Fix critical security vulnerability
-DESCRIPTION: ## What's Changed
-
-### Security & Fixes
-- Patched authentication bypass vulnerability in session handling
-- Improved password validation to prevent weak credentials
+Example JSON Response:
+{"title": "Add dark mode support and improve performance", "description": "## What's Changed\n\n### Improvements\n- New dark mode theme with automatic system preference detection\n- Reduced initial load time by optimizing image loading"}
 
 Git diff:
 {diff}`
