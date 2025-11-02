@@ -34,6 +34,9 @@ type PRInfo struct {
 	Status    string `json:"status"` // "open", "merged", or "closed"
 	CreatedAt string `json:"created_at,omitempty"` // RFC3339 format
 	Branch    string `json:"branch"`
+	PRNumber  int    `json:"pr_number,omitempty"` // GitHub PR number (e.g., 42 from github.com/owner/repo/pull/42)
+	Title     string `json:"title,omitempty"`     // PR title for display
+	Author    string `json:"author,omitempty"`    // Author login for display
 }
 
 // RepoConfig represents configuration for a specific repository
@@ -338,8 +341,17 @@ func (m *Manager) GetPRs(repoPath, branch string) []PRInfo {
 	return []PRInfo{}
 }
 
+// GetLatestPR returns the most recent pull request for a given branch
+func (m *Manager) GetLatestPR(repoPath, branch string) *PRInfo {
+	prs := m.GetPRs(repoPath, branch)
+	if len(prs) == 0 {
+		return nil
+	}
+	return &prs[len(prs)-1]
+}
+
 // AddPR adds a pull request for a given branch
-func (m *Manager) AddPR(repoPath, branch, url string) error {
+func (m *Manager) AddPR(repoPath, branch, url string, prNumber int, title string, author string) error {
 	if m.config.Repositories == nil {
 		m.config.Repositories = make(map[string]*RepoConfig)
 	}
@@ -362,9 +374,12 @@ func (m *Manager) AddPR(repoPath, branch, url string) error {
 
 	// Add new PR with "open" status by default
 	prInfo := PRInfo{
-		URL:    url,
-		Status: "open",
-		Branch: branch,
+		URL:      url,
+		Status:   "open",
+		Branch:   branch,
+		PRNumber: prNumber,
+		Title:    title,
+		Author:   author,
 	}
 	repo.PRs[branch] = append(repo.PRs[branch], prInfo)
 	return m.save()

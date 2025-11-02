@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/coollabsio/gcool/config"
 	"github.com/coollabsio/gcool/git"
+	"github.com/coollabsio/gcool/github"
 )
 
 // debugLog writes a message to the debug log file if debug logging is enabled
@@ -154,6 +155,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Store the newly created branch name for selection after reload
 			m.lastCreatedBranch = msg.branch
+
+			// Store PR info if worktree was created from PR
+			if m.pendingPRInfo != nil && m.configManager != nil {
+				pr := m.pendingPRInfo
+				m.debugLog(fmt.Sprintf("worktreeCreatedMsg: saving PR info - PR #%d (%s) for branch %s to config", pr.Number, pr.Title, msg.branch))
+				if err := m.configManager.AddPR(m.repoPath, msg.branch, pr.URL, pr.Number, pr.Title, pr.Author.Login); err != nil {
+					m.debugLog(fmt.Sprintf("worktreeCreatedMsg: failed to store PR info: %v", err))
+				} else {
+					m.debugLog(fmt.Sprintf("worktreeCreatedMsg: PR info stored successfully"))
+				}
+				m.pendingPRInfo = nil // Clear after storing
+			}
 
 			// Quick refresh without expensive status checks
 			return m, tea.Batch(
@@ -361,10 +374,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			m.debugLog(fmt.Sprintf("Saving PR for branch: %s", prBranch))
+			m.debugLog(fmt.Sprintf("Saving PR for branch: %s, title: %s", prBranch, msg.prTitle))
 			// Save PR to config
 			if prBranch != "" {
-				_ = m.configManager.AddPR(m.repoPath, prBranch, msg.prURL)
+				// Extract PR number from URL (e.g., github.com/owner/repo/pull/123)
+				prNumber := 0
+				if parts := strings.Split(msg.prURL, "/pull/"); len(parts) == 2 {
+					fmt.Sscanf(parts[1], "%d", &prNumber)
+				}
+				m.debugLog(fmt.Sprintf("Extracted PR number: %d from URL: %s", prNumber, msg.prURL))
+				_ = m.configManager.AddPR(m.repoPath, prBranch, msg.prURL, prNumber, msg.prTitle, msg.author)
 			}
 
 			m.debugLog("Triggering worktree refresh after PR creation")
@@ -1547,6 +1566,23 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "P":
 		// Create new PR on GitHub (Shift+P)
 		if wt := m.selectedWorktree(); wt != nil {
+			// Check if a PR already exists for this branch
+			if m.configManager != nil {
+				existingPR := m.configManager.GetLatestPR(m.repoPath, wt.Branch)
+				if existingPR != nil && existingPR.Status == "open" {
+					m.debugLog(fmt.Sprintf("P keybinding: found existing PR #%d for branch %s, opening in browser", existingPR.PRNumber, wt.Branch))
+					// Open the existing PR in the browser
+					cmd := exec.Command("gh", "pr", "view", existingPR.URL, "--web")
+					err := cmd.Start()
+					if err != nil {
+						return m, m.showErrorNotification("Failed to open PR in browser: "+err.Error(), 3*time.Second)
+					}
+					notifyMsg := fmt.Sprintf("PR #%d already exists for this branch. Opening in browser...", existingPR.PRNumber)
+					return m, m.showInfoNotification(notifyMsg)
+				}
+			}
+
+			// No existing PR - create new one
 			// First fetch from remote to get latest changes
 			cmd = m.showInfoNotification("Fetching latest changes...")
 			m.prFetchingForCreation = true // Flag to indicate fetch is for PR creation
@@ -1612,6 +1648,7 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if prs, ok := wt.PRs.([]config.PRInfo); ok && len(prs) > 0 {
 				if len(prs) == 1 {
 					// Only one PR - open it directly
+					m.debugLog(fmt.Sprintf("v keybinding: opening single PR %s", prs[0].URL))
 					cmd := exec.Command("gh", "pr", "view", prs[0].URL, "--web")
 					err := cmd.Start()
 					if err != nil {
@@ -1620,13 +1657,30 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return m, m.showSuccessNotification("Opening PR in browser...", 2*time.Second)
 				} else {
 					// Multiple PRs - show selection modal for viewing
+					m.debugLog(fmt.Sprintf("v keybinding: opening PR selection modal with %d PRs", len(prs)))
 					m.modal = prListModal
-					m.prListCreationMode = false  // Ensure view mode
-					m.prListMergeMode = false      // Ensure view mode
-					m.prListIndex = len(prs) - 1   // Default to most recent
+					m.prListCreationMode = false  // Ensure NOT creation mode
+					m.prListMergeMode = false     // Ensure NOT merge mode
+					m.prListViewMode = true       // SET view mode
+					m.prListIndex = len(prs) - 1  // Default to most recent
 					m.prSearchInput.SetValue("")
 					m.prSearchInput.Focus()
-					m.filteredPRs = nil
+					// Convert config.PRInfo to github.PRInfo for display
+					m.prs = make([]github.PRInfo, len(prs))
+					for i, pr := range prs {
+						m.debugLog(fmt.Sprintf("v keybinding: PR[%d] #%d %s - %s", i, pr.PRNumber, pr.Title, pr.URL))
+						// Convert config.PRInfo to github.PRInfo for modal display
+						m.prs[i] = github.PRInfo{
+							Number:      pr.PRNumber,
+							Title:       pr.Title, // Now we have the title from config
+							URL:         pr.URL,
+							HeadRefName: wt.Branch,
+							Status:      pr.Status,
+						}
+						// Set the author
+						m.prs[i].Author.Login = pr.Author
+					}
+					m.filteredPRs = m.prs // Populate filtered PRs with worktree PRs
 					m.prLoadingError = ""
 					return m, nil
 				}
@@ -2455,6 +2509,7 @@ func (m Model) handlePRListModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modal = noModal
 		m.prListMergeMode = false
 		m.prListCreationMode = false
+		m.prListViewMode = false
 		m.prListIndex = 0
 		m.prSearchInput.Blur()
 		return m, nil
@@ -2507,6 +2562,12 @@ func (m Model) handlePRListModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Handle creation mode: create worktree from PR branch
 		if m.prListCreationMode {
 			m.debugLog(fmt.Sprintf("handlePRListModalInput: CREATION MODE - creating worktree from PR branch: %s", selectedPR.HeadRefName))
+
+			// Store PR info temporarily (will be saved after worktree is created)
+			prCopy := selectedPR // Make a copy to avoid pointer issues
+			m.pendingPRInfo = &prCopy
+			m.debugLog(fmt.Sprintf("handlePRListModalInput: stored pendingPRInfo - PR #%d: %s (URL: %s)", selectedPR.Number, selectedPR.Title, selectedPR.URL))
+
 			m.modal = noModal
 			m.prListCreationMode = false
 			m.prListIndex = 0
@@ -2514,6 +2575,17 @@ func (m Model) handlePRListModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.prSearchInput.Blur()
 			cmd := m.showInfoNotification("Creating worktree from PR...")
 			return m, tea.Batch(cmd, m.createWorktreeFromPR(selectedPR.HeadRefName))
+		} else if m.prListViewMode {
+			// Handle view mode: user pressed 'v' and is selecting a PR to view
+			m.debugLog(fmt.Sprintf("handlePRListModalInput: VIEW MODE - opening selected PR in browser: %s", selectedPR.URL))
+			m.modal = noModal
+			m.prListViewMode = false
+			cmd := exec.Command("gh", "pr", "view", selectedPR.URL, "--web")
+			err := cmd.Start()
+			if err != nil {
+				return m, m.showErrorNotification("Failed to open PR in browser: "+err.Error(), 3*time.Second)
+			}
+			return m, m.showSuccessNotification("Opening PR in browser...", 2*time.Second)
 		} else {
 			// Handle merge or default mode (for worktree PRs)
 			wt := m.selectedWorktree()
@@ -2553,15 +2625,9 @@ func (m Model) handlePRListModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.prListMergeMode = false
 				return m, nil
 			} else {
-				// User is opening PR in browser (default mode)
-				cmd := exec.Command("gh", "pr", "view", selectedConfigPR.URL, "--web")
-				err := cmd.Start()
-				if err != nil {
-					m.modal = noModal
-					return m, m.showErrorNotification("Failed to open PR in browser: "+err.Error(), 3*time.Second)
-				}
+				// This should not happen, but handle it gracefully
 				m.modal = noModal
-				return m, m.showSuccessNotification("Opening PR in browser...", 2*time.Second)
+				return m, m.showWarningNotification("Unknown PR modal mode")
 			}
 		}
 

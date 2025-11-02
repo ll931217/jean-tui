@@ -218,7 +218,9 @@ type Model struct {
 	prListIndex int // Selected PR index in the PR list modal
 	prListMergeMode bool // Whether PR list modal is in merge mode (user pressed SHIFT+M)
 	prListCreationMode bool // Whether PR list modal is in worktree creation mode (user pressed N)
+	prListViewMode bool // Whether PR list modal is in view mode (user pressed v)
 	prFetchingForCreation bool // Whether we're fetching before PR creation
+	pendingPRInfo *github.PRInfo // Temporarily store PR info when creating worktree from PR
 
 	// Merge strategy modal state
 	mergeStrategyCursor int // Selected merge strategy (0=squash, 1=merge, 2=rebase)
@@ -307,7 +309,7 @@ func NewModel(repoPath string, autoClaude bool) Model {
 	aiAPIKeyInput.EchoMode = textinput.EchoPassword // Mask API key input
 
 	prSearchInput := textinput.New()
-	prSearchInput.Placeholder = "Search PRs by title, author, or branch..."
+	prSearchInput.Placeholder = "Search PRs by number, title, author, or branch..."
 	prSearchInput.CharLimit = 100
 	prSearchInput.Width = 50
 
@@ -517,6 +519,8 @@ type (
 		prURL        string
 		branch       string // Branch name for retry on "PR already exists"
 		worktreePath string // Worktree path for retry on "PR already exists"
+		prTitle      string // PR title for storing in config
+		author       string // PR author for storing in config
 	}
 
 	branchPulledMsg struct {
@@ -957,7 +961,13 @@ func (m Model) createPR(worktreePath, branch string, optionalTitle string, optio
 			return prCreatedMsg{err: err, branch: branch, worktreePath: worktreePath}
 		}
 
-		return prCreatedMsg{prURL: prURL, branch: branch, worktreePath: worktreePath}
+		// Get current git user for author field
+		author := ""
+		if user, err := m.gitManager.GetCurrentUser(worktreePath); err == nil {
+			author = user
+		}
+
+		return prCreatedMsg{prURL: prURL, branch: branch, worktreePath: worktreePath, prTitle: title, author: author}
 	}
 }
 
@@ -979,12 +989,18 @@ func (m Model) createOrUpdatePR(worktreePath, branch string, title string, descr
 			return prCreatedMsg{err: fmt.Errorf("failed to check for existing PR: %w", err), branch: branch, worktreePath: worktreePath}
 		}
 
+		// Get current git user for author field
+		author := ""
+		if user, err := m.gitManager.GetCurrentUser(worktreePath); err == nil {
+			author = user
+		}
+
 		// If PR exists, update it instead of creating a new one
 		if existingPRURL != "" {
 			if err := m.githubManager.UpdatePR(worktreePath, branch, title, description); err != nil {
 				return prCreatedMsg{err: err, branch: branch, worktreePath: worktreePath}
 			}
-			return prCreatedMsg{prURL: existingPRURL, branch: branch, worktreePath: worktreePath}
+			return prCreatedMsg{prURL: existingPRURL, branch: branch, worktreePath: worktreePath, prTitle: title, author: author}
 		}
 
 		// PR doesn't exist, create a new one
@@ -993,7 +1009,7 @@ func (m Model) createOrUpdatePR(worktreePath, branch string, title string, descr
 			return prCreatedMsg{err: err, branch: branch, worktreePath: worktreePath}
 		}
 
-		return prCreatedMsg{prURL: prURL, branch: branch, worktreePath: worktreePath}
+		return prCreatedMsg{prURL: prURL, branch: branch, worktreePath: worktreePath, prTitle: title, author: author}
 	}
 }
 
@@ -1438,8 +1454,10 @@ func (m Model) filterPRs(query string) []github.PRInfo {
 	var filtered []github.PRInfo
 	queryLower := strings.ToLower(query)
 	for _, pr := range m.prs {
-		// Search in title, author, and head branch name
-		if strings.Contains(strings.ToLower(pr.Title), queryLower) ||
+		// Search in PR number, title, author, and head branch name
+		prNumberStr := fmt.Sprintf("#%d", pr.Number)
+		if strings.Contains(prNumberStr, query) ||
+			strings.Contains(strings.ToLower(pr.Title), queryLower) ||
 			strings.Contains(strings.ToLower(pr.Author.Login), queryLower) ||
 			strings.Contains(strings.ToLower(pr.HeadRefName), queryLower) {
 			filtered = append(filtered, pr)
