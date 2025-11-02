@@ -44,6 +44,11 @@ type CommitMessage struct {
 	Body    string `json:"body"`
 }
 
+type PRContent struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+}
+
 // NewClient creates a new OpenRouter API client
 func NewClient(apiKey, model string) *Client {
 	if model == "" {
@@ -185,38 +190,25 @@ func (c *Client) GeneratePRContent(diff, customPrompt string) (title, descriptio
 		return "", "", err
 	}
 
-	// Parse response in format "TITLE: ... \n DESCRIPTION: ..."
-	lines := strings.Split(response, "\n")
-	for i, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "TITLE:") {
-			title = strings.TrimSpace(strings.TrimPrefix(line, "TITLE:"))
-			// Continue looking for description
-			for j := i + 1; j < len(lines); j++ {
-				descLine := strings.TrimSpace(lines[j])
-				if strings.HasPrefix(descLine, "DESCRIPTION:") {
-					description = strings.TrimSpace(strings.TrimPrefix(descLine, "DESCRIPTION:"))
-					break
-				}
-			}
-			break
-		}
+	// Parse JSON response
+	var content PRContent
+	if err := json.Unmarshal([]byte(response), &content); err != nil {
+		return "", "", fmt.Errorf("failed to parse AI response: %w", err)
 	}
 
-	// Validate we got both fields
-	if title == "" {
-		return "", "", fmt.Errorf("failed to parse PR title from AI response")
+	// Validate and clean title
+	content.Title = strings.TrimSpace(content.Title)
+	if content.Title == "" {
+		return "", "", fmt.Errorf("AI generated empty PR title")
 	}
-	if description == "" {
-		description = "" // Description is optional
-	}
-
-	// Limit title to 72 characters
-	if len(title) > 72 {
-		title = title[:72]
+	if len(content.Title) > 72 {
+		content.Title = content.Title[:72]
 	}
 
-	return title, description, nil
+	// Clean description (optional)
+	content.Description = strings.TrimSpace(content.Description)
+
+	return content.Title, content.Description, nil
 }
 
 // callAPI makes a request to the OpenRouter API
