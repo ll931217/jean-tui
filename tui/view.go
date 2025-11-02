@@ -248,31 +248,24 @@ func (m Model) renderDetails() string {
 		b.WriteString(detailKeyStyle.Render("Pull Requests:"))
 		b.WriteString("\n")
 		for i, pr := range prs {
-			// Determine status emoji
-			statusEmoji := "🟢"
-			statusColor := successColor
-			switch pr.Status {
-			case "merged":
-				statusEmoji = "🟣"
-				statusColor = successColor
-			case "closed":
-				statusEmoji = "⚫"
-				statusColor = warningColor
-			}
-
-			// Extract PR number from URL if possible (last part of URL)
+			// Format PR display: use PR number if available, fallback to URL extraction
 			prDisplay := pr.URL
-			if strings.Contains(pr.URL, "/pull/") {
+			if pr.PRNumber > 0 {
+				prDisplay = fmt.Sprintf("#%d", pr.PRNumber)
+			} else if strings.Contains(pr.URL, "/pull/") {
+				// Fallback: extract PR number from URL
 				parts := strings.Split(pr.URL, "/pull/")
 				if len(parts) > 1 {
 					prNum := strings.Split(parts[1], "/")[0]
 					prDisplay = "#" + prNum
 				}
 			}
+			// Add status to display
+			if pr.Status != "" {
+				prDisplay = fmt.Sprintf("%s (%s)", prDisplay, pr.Status)
+			}
 
 			b.WriteString("  ")
-			b.WriteString(normalItemStyle.Copy().Foreground(statusColor).Render(statusEmoji))
-			b.WriteString(" ")
 			// Render PR as underlined text with OSC 8 hyperlink support for modern terminals
 			styledPR := normalItemStyle.Copy().Foreground(accentColor).Underline(true).Render(prDisplay)
 			// Add OSC 8 hyperlink codes around the styled text
@@ -1360,9 +1353,14 @@ func (m Model) renderPRListModal() string {
 			pr := filteredPRs[i]
 			displayIdx := i - startIdx
 
-			// Format: #123 - Title (by @author) [branch]
-			line := fmt.Sprintf("#%d - %s (by @%s) [%s]",
+			// Format: #123 - Title (by @author) [branch] {status}
+			statusDisplay := pr.Status
+			if statusDisplay == "" {
+				statusDisplay = "open" // default to open if not set
+			}
+			line := fmt.Sprintf("#%d (%s) - %s (by @%s) [%s]",
 				pr.Number,
+				statusDisplay,
 				pr.Title,
 				pr.Author.Login,
 				pr.HeadRefName,

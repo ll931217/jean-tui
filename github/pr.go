@@ -17,6 +17,7 @@ type PRInfo struct {
 	Title       string `json:"title"`
 	HeadRefName string `json:"headRefName"`
 	URL         string `json:"url"`
+	Status      string `json:"status"` // "open", "merged", or "closed"
 	Author      struct {
 		Login string `json:"login"`
 	} `json:"author"`

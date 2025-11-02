@@ -1175,6 +1175,17 @@ func (m *Manager) GetBranchRemoteURL(branchName string) (string, error) {
 	return url, nil
 }
 
+// GetCurrentUser returns the current git user name
+func (m *Manager) GetCurrentUser(worktreePath string) (string, error) {
+	cmd := exec.Command("git", "-C", worktreePath, "config", "user.name")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get git user: %w", err)
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
 // convertSSHToHTTPS converts SSH git URL to HTTPS format
 // Example: git@github.com:user/repo.git -> https://github.com/user/repo
 func convertSSHToHTTPS(url string) string {
