@@ -891,6 +891,24 @@ func (m Model) renderRenameModal() string {
 	b.WriteString(inputStyle.Render(m.nameInput.View()))
 	b.WriteString("\n\n")
 
+	// Show sanitization preview
+	newName := m.nameInput.Value()
+	sanitizedName := m.sessionManager.SanitizeBranchName(newName)
+
+	if newName != "" {
+		b.WriteString(helpStyle.Render("Will rename to:"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render(fmt.Sprintf("  Branch: %s", sanitizedName)))
+		b.WriteString("\n")
+
+		// Show sanitization notice if name was changed
+		if sanitizedName != newName {
+			b.WriteString(helpStyle.Render(fmt.Sprintf("  (sanitized from '%s')", newName)))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
 	// Spinner or status message
 	if m.generatingRename {
 		// Show spinner animation while generating
