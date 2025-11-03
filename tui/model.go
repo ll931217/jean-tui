@@ -80,6 +80,7 @@ const (
 	createWithNameModal
 	mergeStrategyModal
 	aiPromptsModal
+	prTypeModal
 )
 
 // NotificationType defines the type of notification
@@ -230,6 +231,10 @@ type Model struct {
 	filteredPRs    []github.PRInfo      // Filtered PRs based on search
 	prSearchInput  textinput.Model      // Search input for PR filtering
 	prLoadingError string               // Error message when loading PRs
+
+	// PR type modal state
+	prTypeCursor int  // Selected PR type (0=draft, 1=ready for review)
+	prIsDraft    bool // Whether to create PR as draft (based on user selection)
 
 	// Scripts modal state
 	scriptConfig       *config.ScriptConfig   // Loaded script configuration
@@ -388,6 +393,7 @@ func NewModel(repoPath string, autoClaude bool) Model {
 		repoPath:           absoluteRepoPath,
 		editors:            editors,
 		availableThemes:    GetAvailableThemes(),
+		prTypeCursor:       1, // Default to "Ready for review" (index 1)
 		isInitializing: true,
 	}
 
@@ -1034,8 +1040,8 @@ func (m Model) createPR(worktreePath, branch string, optionalTitle string, optio
 		// Use provided description or default to empty
 		description := optionalDescription
 
-		// Create draft PR
-		prURL, err := m.githubManager.CreateDraftPR(worktreePath, branch, m.baseBranch, title, description)
+		// Create PR (draft or ready for review based on user selection)
+		prURL, err := m.githubManager.CreatePR(worktreePath, branch, m.baseBranch, title, description, m.prIsDraft)
 		if err != nil {
 			return prCreatedMsg{err: err, branch: branch, worktreePath: worktreePath}
 		}
@@ -1082,8 +1088,8 @@ func (m Model) createOrUpdatePR(worktreePath, branch string, title string, descr
 			return prCreatedMsg{prURL: existingPR.URL, branch: branch, worktreePath: worktreePath, prTitle: title, author: author}
 		}
 
-		// PR doesn't exist, create a new one
-		prURL, err := m.githubManager.CreateDraftPR(worktreePath, branch, m.baseBranch, title, description)
+		// PR doesn't exist, create a new one (draft or ready for review based on user selection)
+		prURL, err := m.githubManager.CreatePR(worktreePath, branch, m.baseBranch, title, description, m.prIsDraft)
 		if err != nil {
 			return prCreatedMsg{err: err, branch: branch, worktreePath: worktreePath}
 		}
