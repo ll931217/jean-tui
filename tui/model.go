@@ -83,6 +83,7 @@ const (
 	aiPromptsModal
 	prTypeModal
 	onboardingModal
+	gitInitModal
 )
 
 // NotificationType defines the type of notification
@@ -263,6 +264,9 @@ type Model struct {
 
 	// Onboarding state
 	onboardingFocused int // Which button is focused in onboarding modal (0=install, 1=skip)
+
+	// Git init modal state
+	gitInitError string // Error message for git initialization
 }
 
 // NewModel creates a new TUI model
@@ -453,6 +457,18 @@ func (m Model) Init() tea.Cmd {
 		ApplyTheme("matrix")
 	}
 
+	// Check if this is a git repository
+	if _, err := m.gitManager.GetRepoRoot(); err != nil {
+		// Not a git repository, show git init modal
+		m.modal = gitInitModal
+		m.gitInitError = fmt.Sprintf("Not a git repository in: %s\n\nWould you like to initialize git here?", m.repoPath)
+		return tea.Batch(
+			m.scheduleActivityCheck(),
+			m.checkForUpdates(),
+			tea.EnterAltScreen,
+		)
+	}
+
 	return tea.Batch(
 		m.loadBaseBranch(),
 		m.loadSessions(),
@@ -527,6 +543,10 @@ type (
 
 	baseBranchLoadedMsg struct {
 		branch string
+	}
+
+	gitInitCompletedMsg struct {
+		err error
 	}
 
 	clearErrorMsg struct{}
@@ -1011,6 +1031,18 @@ func (m Model) loadBaseBranch() tea.Cmd {
 			return baseBranchLoadedMsg{branch: defaultBranch}
 		}
 		return baseBranchLoadedMsg{branch: branch}
+	}
+}
+
+func (m Model) initGitRepository() tea.Cmd {
+	return func() tea.Msg {
+		// Run git init in the repo path
+		cmd := exec.Command("git", "init")
+		cmd.Dir = m.repoPath
+		if err := cmd.Run(); err != nil {
+			return gitInitCompletedMsg{err: fmt.Errorf("failed to initialize git repository: %w", err)}
+		}
+		return gitInitCompletedMsg{err: nil}
 	}
 }
 

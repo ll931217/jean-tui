@@ -346,6 +346,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// This dramatically improves perceived startup performance with many worktrees
 		return m, m.loadWorktreesLightweight()
 
+	case gitInitCompletedMsg:
+		if msg.err != nil {
+			// Git init failed, show error and keep modal open
+			m.gitInitError = fmt.Sprintf("Failed to initialize git: %v\n\nTry again? (y/n)", msg.err)
+			return m, nil
+		}
+		// Git init succeeded, close modal and load the app normally
+		m.modal = noModal
+		m.debugLog("Git repository initialized successfully")
+		return m, tea.Batch(
+			m.loadBaseBranch(),
+			m.loadSessions(),
+		)
+
 	case notificationHideMsg:
 		// Only handle if this is the current notification
 		if m.notification != nil && m.notification.ID == msg.id {
@@ -1861,6 +1875,9 @@ func (m Model) handleModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case onboardingModal:
 		return m.handleOnboardingModalInput(msg)
+
+	case gitInitModal:
+		return m.handleGitInitModalInput(msg)
 
 	case helperModal:
 		return m.handleHelperModalInput(msg)
@@ -3601,6 +3618,21 @@ func (m Model) handleOnboardingModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) handleGitInitModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "enter":
+		// Initialize git repository
+		return m, m.initGitRepository()
+
+	case "n", "q", "esc":
+		// Quit application
+		return m, tea.Quit
+
+	default:
+		return m, nil
+	}
 }
 
 func (m Model) handleHelperModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
