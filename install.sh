@@ -96,9 +96,15 @@ download_binary() {
     print_header "Downloading binary from GitHub releases..."
 
     REPO="coollabsio/jean"
-    RELEASE_API="https://api.github.com/repos/$REPO/releases/latest"
 
-    # Get latest release info
+    # Use specified version or fetch latest
+    if [[ -z "$REQUESTED_VERSION" ]]; then
+        RELEASE_API="https://api.github.com/repos/$REPO/releases/latest"
+    else
+        RELEASE_API="https://api.github.com/repos/$REPO/releases/tags/$REQUESTED_VERSION"
+    fi
+
+    # Get release info
     if ! RELEASE_INFO=$(curl -s "$RELEASE_API"); then
         print_warning "Could not fetch release info, will try 'go install' instead"
         return 1
@@ -107,7 +113,7 @@ download_binary() {
     # Extract version
     VERSION=$(echo "$RELEASE_INFO" | grep -o '"tag_name": "[^"]*' | cut -d'"' -f4)
     if [[ -z "$VERSION" ]]; then
-        print_warning "Could not determine latest version, will try 'go install' instead"
+        print_warning "Could not determine version, will try 'go install' instead"
         return 1
     fi
 
@@ -155,7 +161,13 @@ go_install() {
         exit 1
     fi
 
-    if go install github.com/coollabsio/jean@latest; then
+    # Use specified version or latest
+    GO_VERSION="@latest"
+    if [[ -n "$REQUESTED_VERSION" ]]; then
+        GO_VERSION="@$REQUESTED_VERSION"
+    fi
+
+    if go install github.com/coollabsio/jean${GO_VERSION}; then
         # Find the binary installed by go
         GOPATH="${GOPATH:-$HOME/go}"
         JEAN_BINARY="$GOPATH/bin/jean"
@@ -270,6 +282,22 @@ verify_installation() {
 }
 
 # Print usage instructions
+print_usage() {
+    echo "Usage: $0 [VERSION]"
+    echo ""
+    echo "Install jean - Terminal UI for managing Git worktrees"
+    echo ""
+    echo "Arguments:"
+    echo "  VERSION    Specific version to install (e.g., v0.1.1)"
+    echo "             If not specified, installs the latest version"
+    echo ""
+    echo "Examples:"
+    echo "  $0                    # Install latest version"
+    echo "  $0 v0.1.1             # Install specific version"
+    echo ""
+}
+
+# Print usage instructions
 print_next_steps() {
     echo ""
     print_header "Installation complete!"
@@ -284,8 +312,21 @@ print_next_steps() {
 
 # Main installation flow
 main() {
+    # Parse arguments
+    REQUESTED_VERSION=""
+    if [[ $# -gt 0 ]]; then
+        if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+            print_usage
+            exit 0
+        fi
+        REQUESTED_VERSION="$1"
+    fi
+
     echo ""
     print_header "jean Installation Script"
+    if [[ -n "$REQUESTED_VERSION" ]]; then
+        print_info "Installing version: $REQUESTED_VERSION"
+    fi
     echo ""
 
     check_prerequisites
@@ -305,4 +346,4 @@ main() {
 }
 
 # Run installation
-main
+main "$@"
