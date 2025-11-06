@@ -91,9 +91,6 @@ func (c *Client) GenerateCommitMessage(diff, customPrompt string) (subject strin
 	if subject == "" {
 		return "", fmt.Errorf("AI generated empty commit subject")
 	}
-	if len(subject) > 72 {
-		subject = subject[:72]
-	}
 
 	return subject, nil
 }
@@ -188,9 +185,6 @@ func (c *Client) GeneratePRContent(diff, customPrompt string) (title, descriptio
 	content.Title = strings.TrimSpace(content.Title)
 	if content.Title == "" {
 		return "", "", fmt.Errorf("AI generated empty PR title")
-	}
-	if len(content.Title) > 72 {
-		content.Title = content.Title[:72]
 	}
 
 	// Clean description (optional)

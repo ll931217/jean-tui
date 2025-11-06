@@ -10,10 +10,12 @@ const (
 
 Return ONLY the commit message (no JSON, no markdown, no extra text):
 
+CRITICAL: The message MUST be 72 characters or less. This is a hard limit - do not exceed it.
+
 Requirements:
-- Max 72 characters
 - Follow conventional commits format (feat:, fix:, refactor:, chore:, etc.)
 - Present tense, describe what the change does
+- Be concise and specific
 
 Examples:
 - feat: add user authentication with JWT
@@ -42,7 +44,7 @@ Return ONLY valid JSON in this format (no markdown, no extra text):
 {"title": "...", "description": "..."}
 
 Requirements:
-- title: Required. Max 72 characters. Present tense, user-friendly summary.
+- title: CRITICAL - MUST be 72 characters or less (hard limit). Present tense, user-friendly summary.
 - description: Required. Release notes in markdown format following the structure below.
 
 Description Format (use markdown):
