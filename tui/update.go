@@ -37,6 +37,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ready = true
 		return m, nil
 
+	case gitInitRequiredMsg:
+		// Git repository not found, show git init modal
+		m.modal = gitInitModal
+		m.ready = true
+		m.gitInitError = msg.errorMsg
+		// Ensure we have reasonable dimensions for rendering
+		if m.width == 0 {
+			m.width = 80
+		}
+		if m.height == 0 {
+			m.height = 24
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		// Modal is open - handle modal input
 		if m.modal != noModal {

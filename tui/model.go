@@ -414,10 +414,12 @@ func (m Model) Init() tea.Cmd {
 
 	// Check if this is a git repository
 	if _, err := m.gitManager.GetRepoRoot(); err != nil {
-		// Not a git repository, show git init modal
-		m.modal = gitInitModal
-		m.gitInitError = fmt.Sprintf("Not a git repository in: %s\n\nWould you like to initialize git here?", m.repoPath)
+		// Not a git repository, return a message to show git init modal
+		errorMsg := fmt.Sprintf("Not a git repository in: %s\n\nWould you like to initialize git here?", m.repoPath)
 		return tea.Batch(
+			func() tea.Msg {
+				return gitInitRequiredMsg{errorMsg: errorMsg}
+			},
 			m.scheduleActivityCheck(),
 			m.checkForUpdates(),
 			tea.EnterAltScreen,
@@ -435,6 +437,10 @@ func (m Model) Init() tea.Cmd {
 
 // Messages
 type (
+	gitInitRequiredMsg struct {
+		errorMsg string
+	}
+
 	worktreesLoadedMsg struct {
 		worktrees []git.Worktree
 		err       error
