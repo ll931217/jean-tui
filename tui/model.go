@@ -891,60 +891,26 @@ func (m Model) ensureWorktreeExists(worktreePath, branch string) tea.Cmd {
 
 func (m Model) renameBranch(oldName, newName, worktreePath string) tea.Cmd {
 	return func() tea.Msg {
-		// Step 1: Rename the git branch
+		// Rename the git branch only - keep the directory path unchanged
+		// This prevents breaking active Claude CLI sessions and tmux sessions
+		// The UI displays branch names (not directory names), so this is transparent to users
 		err := m.gitManager.RenameBranch(oldName, newName)
 		if err != nil {
 			return branchRenamedMsg{
 				oldBranch: oldName,
 				newBranch: newName,
 				oldPath:   worktreePath,
-				newPath:   worktreePath, // Keep old path since rename failed
+				newPath:   worktreePath,
 				err:       err,
 			}
 		}
 
-		// Step 2: Check if this is a workspace worktree (not root)
-		// Only rename directories in .workspaces/
-		workspacesDir, err := m.gitManager.GetWorkspacesDir()
-		if err != nil || !strings.HasPrefix(worktreePath, workspacesDir) {
-			// Not a workspace worktree, skip directory rename
-			return branchRenamedMsg{
-				oldBranch: oldName,
-				newBranch: newName,
-				oldPath:   worktreePath,
-				newPath:   worktreePath, // Keep old path
-				err:       nil,
-			}
-		}
-
-		// Step 3: Sanitize the new branch name for use as directory name
-		// This creates a safe directory name from the branch name (replaces slashes, etc.)
-		sanitizedDirName := git.SanitizeBranchName(newName)
-		sanitizedDirName = strings.ReplaceAll(sanitizedDirName, "/", "-") // Replace slashes with hyphens
-
-		// Step 4: Calculate new path
-		newPath := filepath.Join(workspacesDir, sanitizedDirName)
-
-		// Step 5: Move the worktree directory
-		if err := m.gitManager.MoveWorktree(worktreePath, newPath); err != nil {
-			// Branch was renamed successfully but directory move failed
-			// This is non-critical - worktree still works with old directory name
-			// Log warning but don't show error to user
-			return branchRenamedMsg{
-				oldBranch: oldName,
-				newBranch: newName,
-				oldPath:   worktreePath,
-				newPath:   worktreePath, // Keep old path since move failed
-				err:       nil,          // Don't treat directory rename failure as error
-			}
-		}
-
-		// Success: both branch and directory renamed
+		// Success: branch renamed, directory path unchanged
 		return branchRenamedMsg{
 			oldBranch: oldName,
 			newBranch: newName,
 			oldPath:   worktreePath,
-			newPath:   newPath,
+			newPath:   worktreePath, // Keep same path to preserve active sessions
 			err:       nil,
 		}
 	}

@@ -412,20 +412,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = m.showErrorNotification("Failed to rename branch", 4*time.Second)
 			return m, cmd
 		} else {
-			// Check if directory was renamed
-			var notificationMsg string
-			if msg.oldPath != msg.newPath {
-				// Directory was renamed successfully
-				oldDir := filepath.Base(msg.oldPath)
-				newDir := filepath.Base(msg.newPath)
-				notificationMsg = fmt.Sprintf("Branch renamed: %s → %s (%s → %s)",
-					msg.oldBranch, msg.newBranch, oldDir, newDir)
-			} else {
-				// Only branch was renamed (not in workspace or move failed)
-				notificationMsg = fmt.Sprintf("Branch renamed: %s → %s", msg.oldBranch, msg.newBranch)
-			}
-
+			// Branch renamed successfully (directory path unchanged to preserve sessions)
+			notificationMsg := fmt.Sprintf("Branch renamed: %s → %s", msg.oldBranch, msg.newBranch)
 			cmd = m.showSuccessNotification(notificationMsg, 4*time.Second)
+
 			// Track the renamed branch for auto-selection after reload
 			m.lastRenamedBranch = msg.newBranch
 			// Rename tmux sessions to match the new branch name

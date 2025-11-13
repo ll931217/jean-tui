@@ -948,25 +948,14 @@ func (m Model) renderRenameModal() string {
 		b.WriteString("\n")
 	}
 
-	// Show directory rename warning for workspace worktrees
+	// Show info about what will be renamed
 	if wt := m.selectedWorktree(); wt != nil {
 		if strings.Contains(wt.Path, ".workspaces") {
-			currentDir := filepath.Base(wt.Path)
-			// Calculate what the new directory name will be
-			var futureDir string
-			if newName != "" {
-				sanitizedDirName := m.sessionManager.SanitizeBranchName(newName)
-				sanitizedDirName = strings.ReplaceAll(sanitizedDirName, "/", "-")
-				futureDir = sanitizedDirName
-			}
-
-			b.WriteString(helpStyle.Render(fmt.Sprintf("⚠️  Directory rename: %s", currentDir)))
-			if futureDir != "" {
-				b.WriteString("\n")
-				b.WriteString(helpStyle.Render(fmt.Sprintf("    New directory will be: %s", futureDir)))
-			}
+			b.WriteString(helpStyle.Render("ℹ️  This will rename the git branch only"))
 			b.WriteString("\n")
-			b.WriteString(helpStyle.Render("    Close editors/terminals first to avoid issues"))
+			b.WriteString(helpStyle.Render("   Directory path stays the same to preserve active sessions"))
+			b.WriteString("\n")
+			b.WriteString(helpStyle.Render("   Tmux sessions will be renamed automatically"))
 			b.WriteString("\n\n")
 		}
 	}
