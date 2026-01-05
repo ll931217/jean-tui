@@ -419,6 +419,10 @@ func (m Model) renderModal() string {
 		return m.renderAISettingsModal()
 	case aiPromptsModal:
 		return m.renderAIPromptsModal()
+	case aiProviderListModal:
+		return m.renderAIProviderListModal()
+	case aiProviderEditModal:
+		return m.renderAIProviderEditModal()
 	case prStateSettingsModal:
 		return m.renderPRStateSettingsModal()
 	case tmuxConfigModal:
@@ -977,7 +981,7 @@ func (m Model) renderRenameModal() string {
 	}
 
 	// AI hint
-	hasAIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+	hasAIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 	if hasAIKey {
 		b.WriteString(helpStyle.Render("🤖 Press 'g' to generate branch name from changes"))
 		b.WriteString("\n\n")
@@ -1153,7 +1157,7 @@ func (m Model) renderCommitModal() string {
 	}
 
 	// AI availability indicator
-	hasAIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+	hasAIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 	if hasAIKey {
 		b.WriteString(helpStyle.Render("💡 Press 'g' to generate commit message with AI"))
 		b.WriteString("\n\n")
@@ -1233,7 +1237,7 @@ func (m Model) renderPRContentModal() string {
 	}
 
 	// AI hint
-	hasAIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+	hasAIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 	if hasAIKey {
 		b.WriteString(helpStyle.Render("💡 Press 'g' to auto-generate PR content with AI"))
 		b.WriteString("\n\n")
@@ -1562,9 +1566,9 @@ func (m Model) renderSettingsModal() string {
 		{
 			name:        "AI Integration",
 			key:         "a",
-			description: "Configure OpenRouter API for AI-powered commit messages and branch names",
+			description: "Manage AI provider profiles (OpenAI, Azure, custom endpoints)",
 			getCurrent: func() string {
-				if m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != "" {
+				if m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath) {
 					return "Configured"
 				}
 				return "Not configured"
@@ -2420,6 +2424,262 @@ func (m Model) renderGitInitModal() string {
 
 	// Center the modal
 	content := modalStyle.Width(70).Render(b.String())
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		content,
+	)
+}
+
+func (m Model) renderAIProviderListModal() string {
+	var b strings.Builder
+
+	b.WriteString(modalTitleStyle.Render("AI Provider Profiles"))
+	b.WriteString("\n\n")
+
+	// Get current active and fallback profile names
+	activeProfile := ""
+	fallbackProfile := ""
+	if m.configManager != nil {
+		activeProfile = m.configManager.GetActiveProfile(m.repoPath)
+		fallbackProfile = m.configManager.GetFallbackProfile(m.repoPath)
+	}
+
+	if len(m.providerProfiles) == 0 {
+		b.WriteString(helpStyle.Render("No provider profiles configured"))
+		b.WriteString("\n\n")
+		b.WriteString(helpStyle.Render("Press 'n' to create a new profile"))
+	} else {
+		// Show profile list
+		for i, profile := range m.providerProfiles {
+			cursor := " "
+			if i == m.providerListCursor {
+				cursor = "›"
+			}
+
+			// Build profile line
+			profileLine := fmt.Sprintf("%s %s", cursor, profile.Name)
+
+			// Add indicators
+			indicators := []string{}
+			if profile.Name == activeProfile {
+				indicators = append(indicators, "active")
+			}
+			if profile.Name == fallbackProfile {
+				indicators = append(indicators, "fallback")
+			}
+
+			if len(indicators) > 0 {
+				profileLine += fmt.Sprintf(" (%s)", strings.Join(indicators, ", "))
+			}
+
+			if i == m.providerListCursor {
+				b.WriteString(selectedItemStyle.Render(profileLine))
+			} else {
+				b.WriteString(normalItemStyle.Render(profileLine))
+			}
+			b.WriteString("\n")
+
+			// Show model and type as details
+			detailStyle := normalItemStyle.Copy().Foreground(mutedColor)
+			if i == m.providerListCursor {
+				detailStyle = selectedItemStyle.Copy().Foreground(mutedColor)
+			}
+
+			detailIndent := "  "
+			if i == m.providerListCursor {
+				detailIndent = "   "
+			}
+
+			providerTypeStr := string(profile.Type)
+			if profile.Type == "custom" && profile.BaseURL != "" {
+				// Shorten URL for display
+				url := profile.BaseURL
+				if len(url) > 30 {
+					url = url[:27] + "..."
+				}
+				providerTypeStr = fmt.Sprintf("%s (%s)", providerTypeStr, url)
+			}
+
+			b.WriteString(detailStyle.Render(fmt.Sprintf("%s• %s • %s", detailIndent, providerTypeStr, profile.Model)))
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n")
+
+	// Buttons
+	newBtn := "[N]ew Profile"
+	editBtn := "[E]dit"
+	deleteBtn := "[D]elete"
+	setActiveBtn := "[S]et Active"
+	setFallbackBtn := "[F]allback"
+	closeBtn := "[Esc] Close"
+
+	buttonRow := newBtn
+	if len(m.providerProfiles) > 0 {
+		buttonRow = fmt.Sprintf("%s  %s  %s  %s  %s  %s", newBtn, editBtn, deleteBtn, setActiveBtn, setFallbackBtn, closeBtn)
+	} else {
+		buttonRow = fmt.Sprintf("%s  %s", newBtn, closeBtn)
+	}
+
+	b.WriteString(buttonStyle.Render(buttonRow))
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("↑↓ navigate • N new • E edit • D delete • S set active • F set fallback • Esc close"))
+
+	// Center the modal
+	content := modalStyle.Width(70).Render(b.String())
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		content,
+	)
+}
+
+func (m Model) renderAIProviderEditModal() string {
+	var b strings.Builder
+
+	title := "Create Profile"
+	if m.profileEditMode {
+		title = "Edit Profile"
+	}
+	b.WriteString(modalTitleStyle.Render(title))
+	b.WriteString("\n\n")
+
+	// Helper function to render a label
+	renderLabel := func(label string, focusIndex int) string {
+		if m.profileEditFocus == focusIndex {
+			return selectedItemStyle.Render(label)
+		}
+		return inputLabelStyle.Render(label)
+	}
+
+	// Profile name
+	b.WriteString(renderLabel("Name:", 0))
+	b.WriteString("\n")
+	if m.profileEditFocus == 0 {
+		b.WriteString(selectedItemStyle.Render(m.profileNameInput.View()))
+	} else {
+		b.WriteString(m.profileNameInput.View())
+	}
+	b.WriteString("\n\n")
+
+	// Provider type selector
+	b.WriteString(renderLabel("Type:", 1))
+	b.WriteString("\n")
+	providerTypes := []struct {
+		Type  string
+		Label string
+	}{
+		{"openai", "OpenAI"},
+		{"azure", "Azure OpenAI"},
+		{"custom", "Custom Endpoint"},
+	}
+
+	for i, pt := range providerTypes {
+		typeStr := fmt.Sprintf("  %s", pt.Label)
+		if i == m.profileTypeIndex {
+			typeStr = fmt.Sprintf("› %s", pt.Label)
+		}
+
+		if m.profileEditFocus == 1 && i == m.profileTypeIndex {
+			b.WriteString(selectedItemStyle.Render(typeStr))
+		} else if m.profileEditFocus == 1 {
+			b.WriteString(normalItemStyle.Render(typeStr))
+		} else {
+			b.WriteString(normalItemStyle.Copy().Foreground(mutedColor).Render(typeStr))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+
+	// Base URL
+	b.WriteString(renderLabel("Base URL:", 2))
+	b.WriteString("\n")
+	urlHelp := "optional"
+	if m.profileTypeIndex == 2 { // custom
+		urlHelp = "required"
+	}
+	if m.profileEditFocus == 2 {
+		b.WriteString(selectedItemStyle.Render(m.profileBaseURLInput.View()))
+	} else {
+		b.WriteString(m.profileBaseURLInput.View())
+	}
+	b.WriteString(helpStyle.Render(fmt.Sprintf(" (%s for custom)", urlHelp)))
+	b.WriteString("\n\n")
+
+	// API Key
+	b.WriteString(renderLabel("API Key:", 3))
+	b.WriteString("\n")
+	if m.profileEditFocus == 3 {
+		b.WriteString(selectedItemStyle.Render(m.profileAPIKeyInput.View()))
+	} else {
+		b.WriteString(m.profileAPIKeyInput.View())
+	}
+	b.WriteString("\n\n")
+
+	// Model
+	b.WriteString(renderLabel("Model:", 4))
+	b.WriteString("\n")
+	if m.profileEditFocus == 4 {
+		b.WriteString(selectedItemStyle.Render(m.profileModelInput.View()))
+	} else {
+		b.WriteString(m.profileModelInput.View())
+	}
+	b.WriteString("\n\n")
+
+	// Fallback checkbox
+	b.WriteString(renderLabel("Set as Fallback:", 5))
+	b.WriteString("\n")
+	checkbox := "[ ]"
+	if m.profileIsFallback {
+		checkbox = selectedItemStyle.Render("[✓]")
+	}
+	if m.profileEditFocus == 5 {
+		b.WriteString(selectedItemStyle.Render(checkbox))
+	} else {
+		b.WriteString(normalItemStyle.Render(checkbox))
+	}
+	b.WriteString(" Set as fallback profile")
+	b.WriteString("\n\n")
+
+	// Status message (error or success from test/save)
+	if m.providerModalStatus != "" {
+		if strings.Contains(m.providerModalStatus, "❌") || strings.Contains(m.providerModalStatus, "Error") {
+			b.WriteString(errorStyle.Render(m.providerModalStatus))
+		} else if strings.Contains(m.providerModalStatus, "✓") || strings.Contains(m.providerModalStatus, "Success") {
+			b.WriteString(statusStyle.Render(m.providerModalStatus))
+		} else {
+			b.WriteString(helpStyle.Render(m.providerModalStatus))
+		}
+		b.WriteString("\n\n")
+	}
+
+	// Buttons
+	testStyle := buttonStyle
+	saveStyle := buttonStyle
+	cancelStyle := cancelButtonStyle
+
+	if m.profileEditFocus == 6 {
+		testStyle = selectedButtonStyle
+	} else if m.profileEditFocus == 7 {
+		saveStyle = selectedButtonStyle
+	} else if m.profileEditFocus == 8 {
+		cancelStyle = selectedCancelButtonStyle
+	}
+
+	buttons := fmt.Sprintf("%s  %s  %s",
+		testStyle.Render("[T]est"),
+		saveStyle.Render("[S]ave"),
+		cancelStyle.Render("[Esc] Cancel"),
+	)
+
+	b.WriteString(buttons)
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("Tab/↑↓ navigate • Enter confirm • Esc cancel"))
+
+	// Center the modal
+	content := modalStyle.Width(60).Render(b.String())
 	return lipgloss.Place(
 		m.width, m.height,
 		lipgloss.Center, lipgloss.Center,

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"github.com/coollabsio/jean-tui/openrouter"
+	"github.com/coollabsio/jean-tui/openai"
 )
 
 // AIPrompts represents customizable AI prompts for various generation tasks
@@ -15,13 +15,27 @@ type AIPrompts struct {
 	PRContent     string `json:"pr_content,omitempty"`     // Custom prompt for PR title and description generation
 }
 
+// AIProviderProfile represents a single AI provider profile configuration
+type AIProviderProfile struct {
+	Name   string              `json:"name"`   // Display name for the profile
+	Type   openai.ProviderType `json:"type"`   // Provider type (openai, azure, custom)
+	BaseURL string              `json:"base_url"` // API base URL (overrides default if set)
+	APIKey string              `json:"api_key"` // API key for authentication
+	Model  string              `json:"model"`  // Model to use
+}
+
+// AIProviderConfig holds all AI provider profiles and settings
+type AIProviderConfig struct {
+	Profiles        map[string]*AIProviderProfile `json:"profiles"`         // name -> profile
+	ActiveProfile   string                        `json:"active_profile"`   // Name of active profile
+	FallbackProfile string                        `json:"fallback_profile"` // Name of fallback profile
+}
+
 // Config represents the global jean configuration
 type Config struct {
 	Repositories        map[string]*RepoConfig `json:"repositories"`
 	LastUpdateCheckTime string                 `json:"lastUpdateCheckTime"` // RFC3339 format
 	DefaultTheme        string                 `json:"default_theme,omitempty"` // Global default theme, "" = matrix
-	OpenRouterAPIKey    string                 `json:"openrouter_api_key,omitempty"` // API key for OpenRouter AI
-	OpenRouterModel     string                 `json:"openrouter_model,omitempty"` // OpenRouter model, "" = default haiku
 	AICommitEnabled     bool                   `json:"ai_commit_enabled,omitempty"` // Enable AI commit message generation
 	AIBranchNameEnabled bool                   `json:"ai_branch_name_enabled,omitempty"` // Enable AI branch name generation
 	DebugLoggingEnabled bool                   `json:"debug_logging_enabled"` // Enable debug logging to temp files
@@ -43,14 +57,15 @@ type PRInfo struct {
 
 // RepoConfig represents configuration for a specific repository
 type RepoConfig struct {
-	BaseBranch         string            `json:"base_branch"`
-	LastSelectedBranch string            `json:"last_selected_branch,omitempty"`
-	Editor             string            `json:"editor,omitempty"`
-	AutoFetchInterval  int               `json:"auto_fetch_interval,omitempty"` // in seconds, 0 = use default (10s)
-	Theme              string            `json:"theme,omitempty"`               // Per-repo theme override, "" = use global default
-	PRDefaultState     string            `json:"pr_default_state,omitempty"`    // "draft" or "ready", "" = use default (ready)
-	PRs                map[string][]PRInfo `json:"prs,omitempty"`                 // branch -> list of PRs
-	InitializedClaudes map[string]bool   `json:"initialized_claudes,omitempty"` // branch -> whether Claude has been started
+	BaseBranch         string                  `json:"base_branch"`
+	LastSelectedBranch string                  `json:"last_selected_branch,omitempty"`
+	Editor             string                  `json:"editor,omitempty"`
+	AutoFetchInterval  int                     `json:"auto_fetch_interval,omitempty"` // in seconds, 0 = use default (10s)
+	Theme              string                  `json:"theme,omitempty"`               // Per-repo theme override, "" = use global default
+	PRDefaultState     string                  `json:"pr_default_state,omitempty"`    // "draft" or "ready", "" = use default (ready)
+	PRs                map[string][]PRInfo      `json:"prs,omitempty"`                // branch -> list of PRs
+	InitializedClaudes map[string]bool        `json:"initialized_claudes,omitempty"` // branch -> whether Claude has been started
+	AIProvider         *AIProviderConfig       `json:"ai_provider,omitempty"`       // AI provider profiles and settings
 }
 
 // Manager handles configuration loading and saving
@@ -273,30 +288,173 @@ func (m *Manager) GetGlobalTheme() string {
 	return "coolify"
 }
 
-// GetOpenRouterAPIKey returns the OpenRouter API key
-func (m *Manager) GetOpenRouterAPIKey() string {
-	return m.config.OpenRouterAPIKey
-}
-
-// SetOpenRouterAPIKey sets the OpenRouter API key
-func (m *Manager) SetOpenRouterAPIKey(apiKey string) error {
-	m.config.OpenRouterAPIKey = apiKey
-	return m.save()
-}
-
-// GetOpenRouterModel returns the OpenRouter model
-// Returns "openai/gpt-4o-mini" if not set
-func (m *Manager) GetOpenRouterModel() string {
-	if m.config.OpenRouterModel != "" {
-		return m.config.OpenRouterModel
+// GetProviderProfiles returns all provider profiles for a repository
+func (m *Manager) GetProviderProfiles(repoPath string) map[string]*AIProviderProfile {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		if repo.AIProvider != nil && repo.AIProvider.Profiles != nil {
+			return repo.AIProvider.Profiles
+		}
 	}
-	return "openai/gpt-4o-mini"
+	return make(map[string]*AIProviderProfile)
 }
 
-// SetOpenRouterModel sets the OpenRouter model
-func (m *Manager) SetOpenRouterModel(model string) error {
-	m.config.OpenRouterModel = model
+// AddProviderProfile adds a new provider profile for a repository
+func (m *Manager) AddProviderProfile(repoPath string, profile *AIProviderProfile) error {
+	if m.config.Repositories == nil {
+		m.config.Repositories = make(map[string]*RepoConfig)
+	}
+
+	if _, ok := m.config.Repositories[repoPath]; !ok {
+		m.config.Repositories[repoPath] = &RepoConfig{}
+	}
+
+	repo := m.config.Repositories[repoPath]
+	if repo.AIProvider == nil {
+		repo.AIProvider = &AIProviderConfig{
+			Profiles: make(map[string]*AIProviderProfile),
+		}
+	}
+
+	if repo.AIProvider.Profiles == nil {
+		repo.AIProvider.Profiles = make(map[string]*AIProviderProfile)
+	}
+
+	repo.AIProvider.Profiles[profile.Name] = profile
 	return m.save()
+}
+
+// UpdateProviderProfile updates an existing provider profile
+func (m *Manager) UpdateProviderProfile(repoPath string, profile *AIProviderProfile) error {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		if repo.AIProvider != nil && repo.AIProvider.Profiles != nil {
+			if _, exists := repo.AIProvider.Profiles[profile.Name]; exists {
+				repo.AIProvider.Profiles[profile.Name] = profile
+				return m.save()
+			}
+		}
+	}
+	return fmt.Errorf("profile '%s' not found", profile.Name)
+}
+
+// DeleteProviderProfile deletes a provider profile
+func (m *Manager) DeleteProviderProfile(repoPath, name string) error {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		if repo.AIProvider != nil && repo.AIProvider.Profiles != nil {
+			if repo.AIProvider.ActiveProfile == name {
+				repo.AIProvider.ActiveProfile = ""
+			}
+			if repo.AIProvider.FallbackProfile == name {
+				repo.AIProvider.FallbackProfile = ""
+			}
+			delete(repo.AIProvider.Profiles, name)
+			return m.save()
+		}
+	}
+	return fmt.Errorf("profile '%s' not found", name)
+}
+
+// GetActiveProfile returns the active profile name for a repository
+func (m *Manager) GetActiveProfile(repoPath string) string {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		if repo.AIProvider != nil {
+			return repo.AIProvider.ActiveProfile
+		}
+	}
+	return ""
+}
+
+// SetActiveProfile sets the active profile for a repository
+func (m *Manager) SetActiveProfile(repoPath, profileName string) error {
+	if m.config.Repositories == nil {
+		m.config.Repositories = make(map[string]*RepoConfig)
+	}
+
+	if _, ok := m.config.Repositories[repoPath]; !ok {
+		m.config.Repositories[repoPath] = &RepoConfig{}
+	}
+
+	repo := m.config.Repositories[repoPath]
+	if repo.AIProvider == nil {
+		repo.AIProvider = &AIProviderConfig{
+			Profiles: make(map[string]*AIProviderProfile),
+		}
+	}
+
+	// Verify profile exists
+	if repo.AIProvider.Profiles != nil {
+		if _, exists := repo.AIProvider.Profiles[profileName]; !exists && profileName != "" {
+			return fmt.Errorf("profile '%s' not found", profileName)
+		}
+	}
+
+	repo.AIProvider.ActiveProfile = profileName
+	return m.save()
+}
+
+// GetFallbackProfile returns the fallback profile name for a repository
+func (m *Manager) GetFallbackProfile(repoPath string) string {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		if repo.AIProvider != nil {
+			return repo.AIProvider.FallbackProfile
+		}
+	}
+	return ""
+}
+
+// SetFallbackProfile sets the fallback profile for a repository
+func (m *Manager) SetFallbackProfile(repoPath, profileName string) error {
+	if m.config.Repositories == nil {
+		m.config.Repositories = make(map[string]*RepoConfig)
+	}
+
+	if _, ok := m.config.Repositories[repoPath]; !ok {
+		m.config.Repositories[repoPath] = &RepoConfig{}
+	}
+
+	repo := m.config.Repositories[repoPath]
+	if repo.AIProvider == nil {
+		repo.AIProvider = &AIProviderConfig{
+			Profiles: make(map[string]*AIProviderProfile),
+		}
+	}
+
+	// Verify profile exists
+	if repo.AIProvider.Profiles != nil {
+		if _, exists := repo.AIProvider.Profiles[profileName]; !exists && profileName != "" {
+			return fmt.Errorf("profile '%s' not found", profileName)
+		}
+	}
+
+	repo.AIProvider.FallbackProfile = profileName
+	return m.save()
+}
+
+// GetActiveProviderProfile returns the active profile configuration for a repository
+func (m *Manager) GetActiveProviderProfile(repoPath string) *AIProviderProfile {
+	activeProfileName := m.GetActiveProfile(repoPath)
+	if activeProfileName == "" {
+		return nil
+	}
+
+	profiles := m.GetProviderProfiles(repoPath)
+	return profiles[activeProfileName]
+}
+
+// GetFallbackProviderProfile returns the fallback profile configuration for a repository
+func (m *Manager) GetFallbackProviderProfile(repoPath string) *AIProviderProfile {
+	fallbackProfileName := m.GetFallbackProfile(repoPath)
+	if fallbackProfileName == "" {
+		return nil
+	}
+
+	profiles := m.GetProviderProfiles(repoPath)
+	return profiles[fallbackProfileName]
+}
+
+// HasActiveAIProvider returns whether an AI provider is configured for a repository
+func (m *Manager) HasActiveAIProvider(repoPath string) bool {
+	profile := m.GetActiveProviderProfile(repoPath)
+	return profile != nil && profile.APIKey != "" && profile.BaseURL != "" && profile.Model != ""
 }
 
 // GetAICommitEnabled returns whether AI commit message generation is enabled
@@ -494,7 +652,7 @@ func (m *Manager) GetCommitPrompt() string {
 	if m.config.AIPrompts != nil && m.config.AIPrompts.CommitMessage != "" {
 		return m.config.AIPrompts.CommitMessage
 	}
-	return openrouter.GetDefaultCommitPrompt()
+	return openai.GetDefaultCommitPrompt()
 }
 
 // SetCommitPrompt sets the custom commit message prompt
@@ -512,7 +670,7 @@ func (m *Manager) GetBranchNamePrompt() string {
 	if m.config.AIPrompts != nil && m.config.AIPrompts.BranchName != "" {
 		return m.config.AIPrompts.BranchName
 	}
-	return openrouter.GetDefaultBranchNamePrompt()
+	return openai.GetDefaultBranchNamePrompt()
 }
 
 // SetBranchNamePrompt sets the custom branch name prompt
@@ -530,7 +688,7 @@ func (m *Manager) GetPRPrompt() string {
 	if m.config.AIPrompts != nil && m.config.AIPrompts.PRContent != "" {
 		return m.config.AIPrompts.PRContent
 	}
-	return openrouter.GetDefaultPRPrompt()
+	return openai.GetDefaultPRPrompt()
 }
 
 // SetPRPrompt sets the custom PR content prompt

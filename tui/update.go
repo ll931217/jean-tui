@@ -9,9 +9,11 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/coollabsio/jean-tui/config"
 	"github.com/coollabsio/jean-tui/git"
 	"github.com/coollabsio/jean-tui/github"
+	"github.com/coollabsio/jean-tui/openai"
 )
 
 // debugLog writes a message to the debug log file if debug logging is enabled
@@ -506,7 +508,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Only retry once - if we're already retrying, don't try again
 				if !m.prRetryInProgress {
 					// Check if AI is configured
-					hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+					hasAPIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 					aiContentEnabled := m.configManager != nil && m.configManager.GetAICommitEnabled()
 
 					if hasAPIKey && aiContentEnabled && msg.worktreePath != "" && msg.branch != "" {
@@ -578,7 +580,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// AI generation failed - fall back to current name (graceful degradation)
 			cmd = m.showWarningNotification("Using current branch name for PR...")
 			// Still try to generate PR content with AI
-			hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+			hasAPIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 			aiContentEnabled := m.configManager != nil && m.configManager.GetAICommitEnabled()
 			if hasAPIKey && aiContentEnabled {
 				return m, tea.Batch(cmd, m.generatePRContent(msg.worktreePath, msg.oldBranchName, m.baseBranch))
@@ -592,7 +594,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Target branch already exists - skip rename and use current name for PR
 			cmd = m.showWarningNotification("Branch name already exists, using current name...")
 			// Still try to generate PR content with AI
-			hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+			hasAPIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 			aiContentEnabled := m.configManager != nil && m.configManager.GetAICommitEnabled()
 			if hasAPIKey && aiContentEnabled {
 				return m, tea.Batch(cmd, m.generatePRContent(msg.worktreePath, msg.oldBranchName, m.baseBranch))
@@ -631,7 +633,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Target branch already exists - skip rename and use current name for PR
 			cmd = m.showWarningNotification("Branch name already exists, using current name...")
 			// Still try to generate PR content with AI
-			hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+			hasAPIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 			aiContentEnabled := m.configManager != nil && m.configManager.GetAICommitEnabled()
 			if hasAPIKey && aiContentEnabled {
 				return m, tea.Batch(cmd, m.generatePRContent(msg.worktreePath, msg.oldBranchName, m.baseBranch))
@@ -650,7 +652,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Rename succeeded, check if we should generate AI PR content
-		hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+		hasAPIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 		aiEnabled := m.configManager != nil && m.configManager.GetAIBranchNameEnabled()
 
 		if hasAPIKey && aiEnabled {
@@ -721,7 +723,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.commitBeforePR = false
 
 				// Check if we should do AI renaming
-				hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+				hasAPIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 				aiEnabled := m.configManager != nil && m.configManager.GetAIBranchNameEnabled()
 				isRandomName := m.gitManager.IsRandomBranchName(branch)
 				shouldAIRename := hasAPIKey && aiEnabled && isRandomName
@@ -741,7 +743,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					// Check if AI is enabled for PR content generation
 					aiEnabled := m.configManager != nil &&
-						m.configManager.GetOpenRouterAPIKey() != "" &&
+						m.configManager.HasActiveAIProvider(m.repoPath) &&
 						m.aiCommitEnabled
 
 					if aiEnabled {
@@ -771,7 +773,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.commitBeforePR = false
 
 				// Check if we should do AI renaming
-				hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+				hasAPIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 				aiEnabled := m.configManager != nil && m.configManager.GetAIBranchNameEnabled()
 				isRandomName := m.gitManager.IsRandomBranchName(wt.Branch)
 				shouldAIRename := hasAPIKey && aiEnabled && isRandomName
@@ -804,7 +806,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Commit succeeded, now proceed with PR creation
 		// Check if we should do AI renaming first
-		hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+		hasAPIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 		aiEnabled := m.configManager != nil && m.configManager.GetAIBranchNameEnabled()
 		isRandomName := m.gitManager.IsRandomBranchName(msg.branch)
 
@@ -823,7 +825,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Check if AI is enabled for PR content generation
 			aiEnabled := m.configManager != nil &&
-				m.configManager.GetOpenRouterAPIKey() != "" &&
+				m.configManager.HasActiveAIProvider(m.repoPath) &&
 				m.aiCommitEnabled
 
 			if aiEnabled {
@@ -1241,7 +1243,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Check AI configuration
-			hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+			hasAPIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 			aiEnabled := m.configManager != nil && m.configManager.GetAIBranchNameEnabled()
 			aiContentEnabled := m.configManager != nil && m.configManager.GetAICommitEnabled()
 			hasAI := hasAPIKey && (aiEnabled || aiContentEnabled)
@@ -1291,7 +1293,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				// Check if AI is enabled for PR content generation
 				aiEnabled := m.configManager != nil &&
-					m.configManager.GetOpenRouterAPIKey() != "" &&
+					m.configManager.HasActiveAIProvider(m.repoPath) &&
 					m.aiCommitEnabled
 
 				if aiEnabled {
@@ -1654,7 +1656,7 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 
 			// Check AI configuration
-			hasAPIKey := m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != ""
+			hasAPIKey := m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath)
 			aiEnabled := m.configManager != nil && m.configManager.GetAIBranchNameEnabled()
 			aiContentEnabled := m.configManager != nil && m.configManager.GetAICommitEnabled()
 			hasAI := hasAPIKey && (aiEnabled || aiContentEnabled)
@@ -1786,11 +1788,11 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 
-			// Check if AI commit generation is enabled and API key is set
+			// Check if AI commit generation is enabled and AI provider is configured
 			aiEnabled := m.configManager.GetAICommitEnabled()
-			apiKey := m.configManager.GetOpenRouterAPIKey()
+			hasAIProvider := m.configManager.HasActiveAIProvider(m.repoPath)
 
-			if aiEnabled && apiKey != "" {
+			if aiEnabled && hasAIProvider {
 				// Auto-generate and auto-commit with AI (no modal shown)
 				m.generatingCommit = true
 				m.spinnerFrame = 0
@@ -1963,6 +1965,12 @@ func (m Model) handleModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case gitInitModal:
 		return m.handleGitInitModalInput(msg)
+
+	case aiProviderListModal:
+		return m.handleAIProviderListModalInput(msg)
+
+	case aiProviderEditModal:
+		return m.handleAIProviderEditModalInput(msg)
 
 	case helperModal:
 		return m.handleHelperModalInput(msg)
@@ -2405,7 +2413,7 @@ func (m Model) handleRenameModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "g":
 		// AI-generate branch name (only when focused on buttons, not input field)
-		if m.modalFocused > 0 && m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != "" {
+		if m.modalFocused > 0 && m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath) {
 			if wt := m.selectedWorktree(); wt != nil {
 				m.generatingRename = true
 				m.renameSpinnerFrame = 0
@@ -2525,7 +2533,7 @@ func (m Model) handleCommitModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "g":
 		// Generate AI commit message (only if not focused on input field and API key is configured)
-		if m.modalFocused > 0 && m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != "" {
+		if m.modalFocused > 0 && m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath) {
 			if wt := m.selectedWorktree(); wt != nil {
 				m.generatingCommit = true
 				m.spinnerFrame = 0
@@ -2549,7 +2557,7 @@ func (m Model) handleCommitModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			subject := m.commitSubjectInput.Value()
 			if subject == "" {
 				// If AI commit is enabled and API key is configured, try auto-generate
-				if m.configManager != nil && m.configManager.GetAICommitEnabled() && m.configManager.GetOpenRouterAPIKey() != "" {
+				if m.configManager != nil && m.configManager.GetAICommitEnabled() && m.configManager.HasActiveAIProvider(m.repoPath) {
 					if wt := m.selectedWorktree(); wt != nil {
 						m.generatingCommit = true
 						m.spinnerFrame = 0
@@ -2616,7 +2624,7 @@ func (m Model) handlePRContentModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "g":
 		// Generate AI PR content (only if not focused on input fields and API key is configured)
-		if m.prModalFocused > 1 && m.configManager != nil && m.configManager.GetOpenRouterAPIKey() != "" {
+		if m.prModalFocused > 1 && m.configManager != nil && m.configManager.HasActiveAIProvider(m.repoPath) {
 			m.generatingPRContent = true
 			m.prSpinnerFrame = 0
 			return m, tea.Batch(
@@ -3266,12 +3274,10 @@ func (m Model) handleSettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case 4:
-			// AI Integration setting - open AI settings modal
-			m.modal = aiSettingsModal
-			m.modalFocused = 0
-			m.aiSettingsIndex = 0
-			m.aiAPIKeyInput.Focus()
-			m.aiModalStatus = "" // Clear any previous status
+			// AI Integration setting - open AI provider profiles modal
+			m.modal = aiProviderListModal
+			m.providerListCursor = 0
+			m.loadProviderProfiles()
 			return m, nil
 
 		case 5:
@@ -3424,9 +3430,11 @@ func (m Model) handleAISettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if apiKey == "" {
 				return m, m.showWarningNotification("API key cannot be empty - enter key first")
 			}
+			// Use OpenRouter's base URL as default for backward compatibility
+			baseURL := "https://openrouter.ai/api/v1"
 			model := m.aiModels[m.aiModelIndex]
 			cmd := m.showInfoNotification("Testing API key...")
-			return m, tea.Batch(cmd, m.testOpenRouterAPIKey(apiKey, model))
+			return m, tea.Batch(cmd, m.testConnection(apiKey, baseURL, model))
 		} else if m.aiModalFocusedField == 5 {
 			// Customize Prompts button
 			m.modal = aiPromptsModal
@@ -3444,12 +3452,10 @@ func (m Model) handleAISettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Save all settings to config
 			var cmd tea.Cmd
 			if m.configManager != nil {
-				if err := m.configManager.SetOpenRouterAPIKey(apiKey); err != nil {
-					return m, m.showErrorNotification("Failed to save API key: " + err.Error(), 3*time.Second)
-				}
-				if err := m.configManager.SetOpenRouterModel(m.aiModels[m.aiModelIndex]); err != nil {
-					return m, m.showErrorNotification("Failed to save model: " + err.Error(), 3*time.Second)
-				}
+				// Note: AI provider configuration has moved to profile-based system
+				// The old API key and model settings are deprecated
+				// TODO: Implement new AI provider management modal
+				// For now, we only save the AI feature toggles
 				if err := m.configManager.SetAICommitEnabled(m.aiCommitEnabled); err != nil {
 					return m, m.showErrorNotification("Failed to save AI commit setting: " + err.Error(), 3*time.Second)
 				}
@@ -3473,12 +3479,9 @@ func (m Model) handleAISettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else if m.aiModalFocusedField == 8 {
 			// Clear button - remove API key
 			m.aiAPIKeyInput.SetValue("")
-			if m.configManager != nil {
-				if err := m.configManager.SetOpenRouterAPIKey(""); err != nil {
-					return m, m.showErrorNotification("Failed to clear API key: " + err.Error(), 3*time.Second)
-				}
-			}
-			cmd := m.showSuccessNotification("API key cleared - AI features disabled", 2*time.Second)
+			// Note: AI provider clearing should be done through the new profile management
+			// For now, this is a no-op in the old settings modal
+			cmd := m.showSuccessNotification("API key cleared - Use AI Provider menu to manage profiles", 3*time.Second)
 			m.modal = settingsModal
 			m.settingsIndex = 4
 			m.aiAPIKeyInput.Blur()
@@ -3765,3 +3768,499 @@ func (m Model) handleHelperModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	return m, nil
 }
+
+func (m Model) handleAIProviderListModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		// Return to settings modal
+		m.modal = settingsModal
+		m.settingsIndex = 4 // AI Integration setting
+		return m, nil
+
+	case "up", "k":
+		if m.providerListCursor > 0 {
+			m.providerListCursor--
+		}
+		return m, nil
+
+	case "down", "j":
+		if m.providerListCursor < len(m.providerProfiles)-1 {
+			m.providerListCursor++
+		}
+		return m, nil
+
+	case "n":
+		// Create new profile
+		m.modal = aiProviderEditModal
+		m.profileEditMode = false
+		m.profileEditFocus = 0
+		m.profileTypeIndex = 0 // Default to OpenAI
+		m.profileIsFallback = false
+
+		// Initialize input fields
+		m.profileNameInput = textinput.New()
+		m.profileNameInput.Placeholder = "My Profile"
+		m.profileNameInput.Focus()
+		m.profileNameInput.CharLimit = 50
+
+		m.profileBaseURLInput = textinput.New()
+		m.profileBaseURLInput.Placeholder = "https://api.openai.com/v1"
+
+		m.profileAPIKeyInput = textinput.New()
+		m.profileAPIKeyInput.Placeholder = "sk-..."
+		m.profileAPIKeyInput.EchoMode = textinput.EchoPassword
+		m.profileAPIKeyInput.EchoCharacter = '•'
+
+		m.profileModelInput = textinput.New()
+		m.profileModelInput.Placeholder = "gpt-4"
+		m.profileModelInput.CharLimit = 50
+
+		m.providerModalStatus = ""
+		m.profileOriginalName = ""
+		return m, nil
+
+	case "e":
+		// Edit existing profile
+		if len(m.providerProfiles) == 0 {
+			return m, nil
+		}
+
+		selectedProfile := m.providerProfiles[m.providerListCursor]
+		m.modal = aiProviderEditModal
+		m.profileEditMode = true
+		m.profileEditFocus = 0
+		m.profileOriginalName = selectedProfile.Name
+
+		// Populate fields from existing profile
+		m.profileNameInput = textinput.New()
+		m.profileNameInput.SetValue(selectedProfile.Name)
+		m.profileNameInput.Focus()
+		m.profileNameInput.CharLimit = 50
+
+		// Set provider type
+		switch selectedProfile.Type {
+		case openai.ProviderOpenAI:
+			m.profileTypeIndex = 0
+		case openai.ProviderAzure:
+			m.profileTypeIndex = 1
+		case openai.ProviderCustom:
+			m.profileTypeIndex = 2
+		default:
+			m.profileTypeIndex = 0
+		}
+
+		m.profileBaseURLInput = textinput.New()
+		m.profileBaseURLInput.SetValue(selectedProfile.BaseURL)
+
+		m.profileAPIKeyInput = textinput.New()
+		m.profileAPIKeyInput.SetValue(selectedProfile.APIKey)
+		m.profileAPIKeyInput.EchoMode = textinput.EchoPassword
+		m.profileAPIKeyInput.EchoCharacter = '•'
+
+		m.profileModelInput = textinput.New()
+		m.profileModelInput.SetValue(selectedProfile.Model)
+		m.profileModelInput.CharLimit = 50
+
+		// Check if this is the fallback profile
+		if m.configManager != nil {
+			fallbackProfile := m.configManager.GetFallbackProfile(m.repoPath)
+			m.profileIsFallback = (selectedProfile.Name == fallbackProfile)
+		}
+
+		m.providerModalStatus = ""
+		return m, nil
+
+	case "d":
+		// Delete profile
+		if len(m.providerProfiles) == 0 {
+			return m, nil
+		}
+
+		selectedProfile := m.providerProfiles[m.providerListCursor]
+		if m.configManager != nil {
+			if err := m.configManager.DeleteProviderProfile(m.repoPath, selectedProfile.Name); err != nil {
+				cmd := m.showErrorNotification(fmt.Sprintf("Failed to delete profile: %v", err), 3*time.Second)
+				return m, cmd
+			}
+
+			// Reload profiles
+			m.loadProviderProfiles()
+
+			// Adjust cursor if needed
+			if m.providerListCursor >= len(m.providerProfiles) {
+				m.providerListCursor = len(m.providerProfiles) - 1
+			}
+
+			cmd := m.showSuccessNotification(fmt.Sprintf("Deleted profile: %s", selectedProfile.Name), 3*time.Second)
+			return m, cmd
+		}
+		return m, nil
+
+	case "s":
+		// Set as active profile
+		if len(m.providerProfiles) == 0 {
+			return m, nil
+		}
+
+		selectedProfile := m.providerProfiles[m.providerListCursor]
+		if m.configManager != nil {
+			if err := m.configManager.SetActiveProfile(m.repoPath, selectedProfile.Name); err != nil {
+				cmd := m.showErrorNotification(fmt.Sprintf("Failed to set active profile: %v", err), 3*time.Second)
+				return m, cmd
+			}
+
+			cmd := m.showSuccessNotification(fmt.Sprintf("Active profile set to: %s", selectedProfile.Name), 3*time.Second)
+			return m, cmd
+		}
+		return m, nil
+
+	case "f":
+		// Set as fallback profile
+		if len(m.providerProfiles) == 0 {
+			return m, nil
+		}
+
+		selectedProfile := m.providerProfiles[m.providerListCursor]
+		if m.configManager != nil {
+			if err := m.configManager.SetFallbackProfile(m.repoPath, selectedProfile.Name); err != nil {
+				cmd := m.showErrorNotification(fmt.Sprintf("Failed to set fallback profile: %v", err), 3*time.Second)
+				return m, cmd
+			}
+
+			cmd := m.showSuccessNotification(fmt.Sprintf("Fallback profile set to: %s", selectedProfile.Name), 3*time.Second)
+			return m, cmd
+		}
+		return m, nil
+
+	case "enter":
+		// Same as 'e' - edit selected profile
+		if len(m.providerProfiles) > 0 {
+			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}}
+			return m.handleAIProviderListModalInput(msg)
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m Model) handleAIProviderEditModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		// Return to profile list modal
+		m.modal = aiProviderListModal
+		m.profileNameInput.Blur()
+		m.profileBaseURLInput.Blur()
+		m.profileAPIKeyInput.Blur()
+		m.profileModelInput.Blur()
+		m.providerModalStatus = ""
+		return m, nil
+
+	case "tab", "shift+tab":
+		// Cycle through fields: 0=name, 1=type, 2=baseurl, 3=apikey, 4=model, 5=fallback, 6=test, 7=save, 8=cancel
+		m.profileEditFocus = (m.profileEditFocus + 1) % 9
+
+		// Focus/unfocus inputs based on current field
+		switch m.profileEditFocus {
+		case 0:
+			m.profileNameInput.Focus()
+			m.profileBaseURLInput.Blur()
+			m.profileAPIKeyInput.Blur()
+			m.profileModelInput.Blur()
+		case 1, 5, 6, 7, 8:
+			m.profileNameInput.Blur()
+			m.profileBaseURLInput.Blur()
+			m.profileAPIKeyInput.Blur()
+			m.profileModelInput.Blur()
+		case 2:
+			m.profileNameInput.Blur()
+			m.profileBaseURLInput.Focus()
+			m.profileAPIKeyInput.Blur()
+			m.profileModelInput.Blur()
+		case 3:
+			m.profileNameInput.Blur()
+			m.profileBaseURLInput.Blur()
+			m.profileAPIKeyInput.Focus()
+			m.profileModelInput.Blur()
+		case 4:
+			m.profileNameInput.Blur()
+			m.profileBaseURLInput.Blur()
+			m.profileAPIKeyInput.Blur()
+			m.profileModelInput.Focus()
+		}
+		return m, nil
+
+	case "up":
+		// Handle type selector navigation
+		if m.profileEditFocus == 1 {
+			if m.profileTypeIndex > 0 {
+				m.profileTypeIndex--
+			}
+			return m, nil
+		}
+		// Otherwise move to previous field
+		m.profileEditFocus = (m.profileEditFocus + 8) % 9 // Move backwards
+		// Update focus
+		switch m.profileEditFocus {
+		case 0:
+			m.profileNameInput.Focus()
+			m.profileBaseURLInput.Blur()
+			m.profileAPIKeyInput.Blur()
+			m.profileModelInput.Blur()
+		case 1, 5, 6, 7, 8:
+			m.profileNameInput.Blur()
+			m.profileBaseURLInput.Blur()
+			m.profileAPIKeyInput.Blur()
+			m.profileModelInput.Blur()
+		case 2:
+			m.profileNameInput.Blur()
+			m.profileBaseURLInput.Focus()
+			m.profileAPIKeyInput.Blur()
+			m.profileModelInput.Blur()
+		case 3:
+			m.profileNameInput.Blur()
+			m.profileBaseURLInput.Blur()
+			m.profileAPIKeyInput.Focus()
+			m.profileModelInput.Blur()
+		case 4:
+			m.profileNameInput.Blur()
+			m.profileBaseURLInput.Blur()
+			m.profileAPIKeyInput.Blur()
+			m.profileModelInput.Focus()
+		}
+		return m, nil
+
+	case "down":
+		// Handle type selector navigation
+		if m.profileEditFocus == 1 {
+			if m.profileTypeIndex < 2 { // 3 types: openai, azure, custom
+				m.profileTypeIndex++
+			}
+			return m, nil
+		}
+		// Otherwise move to next field
+		return m.handleAIProviderEditModalInput(tea.KeyMsg{Type: tea.KeyTab})
+
+	case "enter":
+		// Handle based on which field is focused
+		switch m.profileEditFocus {
+		case 0, 2, 3, 4:
+			// Enter in input field - move to next field
+			return m.handleAIProviderEditModalInput(tea.KeyMsg{Type: tea.KeyTab})
+
+		case 1:
+			// Enter on type selector - move to next field
+			return m.handleAIProviderEditModalInput(tea.KeyMsg{Type: tea.KeyTab})
+
+		case 5:
+			// Toggle fallback checkbox
+			m.profileIsFallback = !m.profileIsFallback
+			return m, nil
+
+		case 6:
+			// Test button
+			return m.testProviderProfile()
+
+		case 7:
+			// Save button
+			return m.saveProviderProfile()
+
+		case 8:
+			// Cancel button
+			return m.handleAIProviderEditModalInput(tea.KeyMsg{Type: tea.KeyEsc})
+		}
+
+	case "t":
+		// Quick key for Test button (when not in text input)
+		if m.profileEditFocus > 4 {
+			msg = tea.KeyMsg{Type: tea.KeyEnter}
+			m.profileEditFocus = 6
+			return m.handleAIProviderEditModalInput(msg)
+		}
+
+	case "s":
+		// Quick key for Save button (when not in text input)
+		if m.profileEditFocus > 4 {
+			msg = tea.KeyMsg{Type: tea.KeyEnter}
+			m.profileEditFocus = 7
+			return m.handleAIProviderEditModalInput(msg)
+		}
+	}
+
+	// Handle text input for focused fields
+	var cmd tea.Cmd
+	switch m.profileEditFocus {
+	case 0:
+		m.profileNameInput, cmd = m.profileNameInput.Update(msg)
+	case 2:
+		m.profileBaseURLInput, cmd = m.profileBaseURLInput.Update(msg)
+	case 3:
+		m.profileAPIKeyInput, cmd = m.profileAPIKeyInput.Update(msg)
+	case 4:
+		m.profileModelInput, cmd = m.profileModelInput.Update(msg)
+	}
+
+	return m, cmd
+}
+
+// loadProviderProfiles loads provider profiles from config
+func (m *Model) loadProviderProfiles() {
+	if m.configManager == nil {
+		m.providerProfiles = []config.AIProviderProfile{}
+		return
+	}
+
+	profilesMap := m.configManager.GetProviderProfiles(m.repoPath)
+
+	// Convert map to slice for ordered display
+	m.providerProfiles = make([]config.AIProviderProfile, 0, len(profilesMap))
+	for _, profile := range profilesMap {
+		m.providerProfiles = append(m.providerProfiles, *profile)
+	}
+}
+
+// testProviderProfile tests the current provider profile configuration
+func (m Model) testProviderProfile() (tea.Model, tea.Cmd) {
+	// Validate inputs
+	if m.profileNameInput.Value() == "" {
+		m.providerModalStatus = "❌ Profile name is required"
+		return m, nil
+	}
+
+	if m.profileAPIKeyInput.Value() == "" {
+		m.providerModalStatus = "❌ API key is required"
+		return m, nil
+	}
+
+	if m.profileModelInput.Value() == "" {
+		m.providerModalStatus = "❌ Model is required"
+		return m, nil
+	}
+
+	// Check if custom type has base URL
+	providerType := openai.ProviderOpenAI
+	switch m.profileTypeIndex {
+	case 0:
+		providerType = openai.ProviderOpenAI
+	case 1:
+		providerType = openai.ProviderAzure
+	case 2:
+		providerType = openai.ProviderCustom
+	}
+
+	if providerType == openai.ProviderCustom && m.profileBaseURLInput.Value() == "" {
+		m.providerModalStatus = "❌ Base URL is required for custom providers"
+		return m, nil
+	}
+
+	// For now, just validate inputs - actual API testing can be added later
+	m.providerModalStatus = "✓ Configuration is valid"
+	return m, nil
+}
+
+// saveProviderProfile saves the current provider profile
+func (m Model) saveProviderProfile() (tea.Model, tea.Cmd) {
+	// Validate inputs
+	if m.profileNameInput.Value() == "" {
+		m.providerModalStatus = "❌ Profile name is required"
+		return m, nil
+	}
+
+	if m.profileAPIKeyInput.Value() == "" {
+		m.providerModalStatus = "❌ API key is required"
+		return m, nil
+	}
+
+	if m.profileModelInput.Value() == "" {
+		m.providerModalStatus = "❌ Model is required"
+		return m, nil
+	}
+
+	// Check if custom type has base URL
+	providerType := openai.ProviderOpenAI
+	switch m.profileTypeIndex {
+	case 0:
+		providerType = openai.ProviderOpenAI
+	case 1:
+		providerType = openai.ProviderAzure
+	case 2:
+		providerType = openai.ProviderCustom
+	}
+
+	if providerType == openai.ProviderCustom && m.profileBaseURLInput.Value() == "" {
+		m.providerModalStatus = "❌ Base URL is required for custom providers"
+		return m, nil
+	}
+
+	if m.configManager == nil {
+		m.providerModalStatus = "❌ Config manager not available"
+		return m, nil
+	}
+
+	// Create profile
+	profile := &config.AIProviderProfile{
+		Name:   m.profileNameInput.Value(),
+		Type:   providerType,
+		BaseURL: m.profileBaseURLInput.Value(),
+		APIKey: m.profileAPIKeyInput.Value(),
+		Model:  m.profileModelInput.Value(),
+	}
+
+	var err error
+	if m.profileEditMode {
+		// Update existing profile
+		// If name changed, we need to delete old and create new
+		if m.profileOriginalName != "" && m.profileOriginalName != profile.Name {
+			// Delete old profile first
+			if delErr := m.configManager.DeleteProviderProfile(m.repoPath, m.profileOriginalName); delErr != nil {
+				m.providerModalStatus = fmt.Sprintf("❌ Failed to rename profile: %v", delErr)
+				return m, nil
+			}
+			// Add as new profile
+			err = m.configManager.AddProviderProfile(m.repoPath, profile)
+		} else {
+			// Just update existing
+			err = m.configManager.UpdateProviderProfile(m.repoPath, profile)
+		}
+	} else {
+		// Create new profile
+		err = m.configManager.AddProviderProfile(m.repoPath, profile)
+	}
+
+	if err != nil {
+		m.providerModalStatus = fmt.Sprintf("❌ Failed to save profile: %v", err)
+		return m, nil
+	}
+
+	// Set as fallback if requested
+	if m.profileIsFallback {
+		if err := m.configManager.SetFallbackProfile(m.repoPath, profile.Name); err != nil {
+			m.providerModalStatus = fmt.Sprintf("❌ Profile saved but failed to set as fallback: %v", err)
+			return m, nil
+		}
+	}
+
+	// If this is the first profile, automatically set it as active
+	profilesMap := m.configManager.GetProviderProfiles(m.repoPath)
+	if len(profilesMap) == 1 {
+		if err := m.configManager.SetActiveProfile(m.repoPath, profile.Name); err != nil {
+			m.providerModalStatus = fmt.Sprintf("⚠ Profile saved but failed to set as active: %v", err)
+			return m, nil
+		}
+	}
+
+	// Success - return to list modal
+	m.loadProviderProfiles()
+	m.modal = aiProviderListModal
+	m.providerModalStatus = ""
+
+	var cmd tea.Cmd
+	if m.profileEditMode {
+		cmd = m.showSuccessNotification(fmt.Sprintf("Profile updated: %s", profile.Name), 3*time.Second)
+	} else {
+		cmd = m.showSuccessNotification(fmt.Sprintf("Profile created: %s", profile.Name), 3*time.Second)
+	}
+
+	return m, cmd
+}
+

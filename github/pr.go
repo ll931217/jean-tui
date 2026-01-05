@@ -255,15 +255,13 @@ func (m *Manager) ListPRs(worktreePath string) ([]PRInfo, error) {
 	cmd.Dir = worktreePath
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		errMsg := fmt.Sprintf("failed to list PRs: %s", string(output))
-		return nil, fmt.Errorf(errMsg)
+		return nil, fmt.Errorf("failed to list PRs: %s", string(output))
 	}
 
 	// Parse JSON response
 	var prs []PRInfo
 	if err := json.Unmarshal(output, &prs); err != nil {
-		errMsg := fmt.Sprintf("failed to parse PR list: %v", err)
-		return nil, fmt.Errorf(errMsg)
+		return nil, fmt.Errorf("failed to parse PR list: %v", err)
 	}
 
 	return prs, nil

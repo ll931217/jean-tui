@@ -15,7 +15,7 @@ import (
 	"github.com/coollabsio/jean-tui/git"
 	"github.com/coollabsio/jean-tui/github"
 	"github.com/coollabsio/jean-tui/internal/version"
-	"github.com/coollabsio/jean-tui/openrouter"
+	"github.com/coollabsio/jean-tui/openai"
 	"github.com/coollabsio/jean-tui/session"
 )
 
@@ -58,6 +58,8 @@ const (
 	prStateSettingsModal
 	onboardingModal
 	gitInitModal
+	aiProviderListModal
+	aiProviderEditModal
 )
 
 // NotificationType defines the type of notification
@@ -160,6 +162,21 @@ type Model struct {
 	aiPromptsModalFocus    int                    // Which element is focused (0=commit, 1=branch, 2=pr, 3=save, 4=reset, 5=cancel)
 	aiPromptsStatus        string                 // Status message for AI prompts modal
 	aiPromptsStatusTime    time.Time              // When the status was set
+
+	// AI Provider Profiles modal state
+	providerProfiles       []config.AIProviderProfile // List of provider profiles
+	providerListCursor     int                         // Selected profile index in list
+	profileNameInput       textinput.Model             // Profile name input field
+	profileTypeIndex       int                         // Selected provider type (0=openai, 1=azure, 2=custom)
+	profileBaseURLInput    textinput.Model             // Base URL input field
+	profileAPIKeyInput     textinput.Model             // API key input field
+	profileModelInput      textinput.Model             // Model input field
+	profileIsFallback      bool                        // Whether this profile is set as fallback
+	profileEditMode        bool                        // true=edit existing, false=create new
+	profileEditFocus       int                         // Which field is focused (0=name, 1=type, 2=baseurl, 3=apikey, 4=model, 5=fallback, 6=test, 7=save, 8=cancel)
+	profileOriginalName    string                      // Original profile name (for rename detection)
+	providerModalStatus    string                      // Status message for provider modal (error/success)
+	providerModalStatusTime time.Time                  // When the status was set
 
 	// Commit modal status
 	commitModalStatus      string                 // Status message for commit modal (error/success from AI)
@@ -378,20 +395,8 @@ func NewModel(repoPath string, autoClaude bool) Model {
 
 	// Load AI settings from config
 	if configManager != nil {
-		if apiKey := configManager.GetOpenRouterAPIKey(); apiKey != "" {
-			m.aiAPIKeyInput.SetValue(apiKey)
-		}
 		m.aiCommitEnabled = configManager.GetAICommitEnabled()
 		m.aiBranchNameEnabled = configManager.GetAIBranchNameEnabled()
-
-		// Set model index based on saved model
-		savedModel := configManager.GetOpenRouterModel()
-		for i, model := range aiModels {
-			if model == savedModel {
-				m.aiModelIndex = i
-				break
-			}
-		}
 	}
 
 	return m
@@ -1167,12 +1172,28 @@ func (m Model) changeTheme(themeName string) tea.Cmd {
 	}
 }
 
-// generateCommitMessageWithAI generates a commit message using OpenRouter API
+// generateCommitMessageWithAI generates a commit message using AI API
 func (m Model) generateCommitMessageWithAI(worktreePath string) tea.Cmd {
 	return func() tea.Msg {
-		apiKey := m.configManager.GetOpenRouterAPIKey()
-		if apiKey == "" {
-			return commitMessageGeneratedMsg{err: fmt.Errorf("OpenRouter API key not configured")}
+		// Get active AI provider profile
+		profile := m.configManager.GetActiveProviderProfile(m.repoPath)
+		if profile == nil {
+			return commitMessageGeneratedMsg{err: fmt.Errorf("AI provider not configured. Please configure an AI provider in settings")}
+		}
+
+		// Create AI client
+		client, err := openai.NewClient(profile.APIKey, profile.BaseURL, profile.Model)
+		if err != nil {
+			// Try fallback provider
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				client, err = openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if err != nil {
+					return commitMessageGeneratedMsg{err: fmt.Errorf("failed to create fallback AI client: %w", err)}
+				}
+			} else {
+				return commitMessageGeneratedMsg{err: fmt.Errorf("failed to create AI client: %w", err)}
+			}
 		}
 
 		// Get git status
@@ -1203,12 +1224,23 @@ func (m Model) generateCommitMessageWithAI(worktreePath string) tea.Cmd {
 			log = "(unable to get recent commits)"
 		}
 
-		// Call OpenRouter API
-		model := m.configManager.GetOpenRouterModel()
-		client := openrouter.NewClient(apiKey, model)
+		// Call AI API
 		customPrompt := m.configManager.GetCommitPrompt()
 		subject, err := client.GenerateCommitMessage(status, diff, branch, log, customPrompt)
 		if err != nil {
+			// Try fallback provider
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				fallbackClient, fallbackErr := openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if fallbackErr == nil {
+					subject, err = fallbackClient.GenerateCommitMessage(status, diff, branch, log, customPrompt)
+					if err == nil {
+						// Successfully used fallback - return result
+						return commitMessageGeneratedMsg{subject: subject, err: nil}
+					}
+					// Fallback also failed, continue to error below
+				}
+			}
 			return commitMessageGeneratedMsg{err: fmt.Errorf("failed to generate commit message: %w", err)}
 		}
 
@@ -1219,9 +1251,25 @@ func (m Model) generateCommitMessageWithAI(worktreePath string) tea.Cmd {
 // generateRenameWithAI generates a branch name suggestion based on git changes
 func (m Model) generateRenameWithAI(worktreePath, baseBranch string) tea.Cmd {
 	return func() tea.Msg {
-		apiKey := m.configManager.GetOpenRouterAPIKey()
-		if apiKey == "" {
-			return renameGeneratedMsg{err: fmt.Errorf("OpenRouter API key not configured")}
+		// Get active AI provider profile
+		profile := m.configManager.GetActiveProviderProfile(m.repoPath)
+		if profile == nil {
+			return renameGeneratedMsg{err: fmt.Errorf("AI provider not configured. Please configure an AI provider in settings")}
+		}
+
+		// Create AI client
+		client, err := openai.NewClient(profile.APIKey, profile.BaseURL, profile.Model)
+		if err != nil {
+			// Try fallback provider
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				client, err = openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if err != nil {
+					return renameGeneratedMsg{err: fmt.Errorf("failed to create fallback AI client: %w", err)}
+				}
+			} else {
+				return renameGeneratedMsg{err: fmt.Errorf("failed to create AI client: %w", err)}
+			}
 		}
 
 		// Get uncommitted changes
@@ -1240,12 +1288,23 @@ func (m Model) generateRenameWithAI(worktreePath, baseBranch string) tea.Cmd {
 			return renameGeneratedMsg{err: fmt.Errorf("no changes detected to generate branch name")}
 		}
 
-		// Call OpenRouter API
-		model := m.configManager.GetOpenRouterModel()
-		client := openrouter.NewClient(apiKey, model)
+		// Call AI API
 		customPrompt := m.configManager.GetBranchNamePrompt()
 		name, err := client.GenerateBranchName(diff, customPrompt)
 		if err != nil {
+			// Try fallback provider
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				fallbackClient, fallbackErr := openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if fallbackErr == nil {
+					name, err = fallbackClient.GenerateBranchName(diff, customPrompt)
+					if err == nil {
+						// Successfully used fallback - return result
+						return renameGeneratedMsg{name: name, err: nil}
+					}
+					// Fallback also failed, continue to error below
+				}
+			}
 			return renameGeneratedMsg{err: fmt.Errorf("failed to generate branch name: %w", err)}
 		}
 
@@ -1256,12 +1315,36 @@ func (m Model) generateRenameWithAI(worktreePath, baseBranch string) tea.Cmd {
 // generateBranchNameForPR generates an AI branch name for PR creation
 func (m Model) generateBranchNameForPR(worktreePath, oldBranch, baseBranch string) tea.Cmd {
 	return func() tea.Msg {
-		apiKey := m.configManager.GetOpenRouterAPIKey()
-		if apiKey == "" {
+		// Get active AI provider profile
+		profile := m.configManager.GetActiveProviderProfile(m.repoPath)
+		if profile == nil {
 			return prBranchNameGeneratedMsg{
 				oldBranchName: oldBranch,
 				worktreePath:  worktreePath,
-				err:           fmt.Errorf("API key not configured"),
+				err:           fmt.Errorf("AI provider not configured. Please configure an AI provider in settings"),
+			}
+		}
+
+		// Create AI client
+		client, err := openai.NewClient(profile.APIKey, profile.BaseURL, profile.Model)
+		if err != nil {
+			// Try fallback provider
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				client, err = openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if err != nil {
+					return prBranchNameGeneratedMsg{
+						oldBranchName: oldBranch,
+						worktreePath:  worktreePath,
+						err:           fmt.Errorf("failed to create fallback AI client: %w", err),
+					}
+				}
+			} else {
+				return prBranchNameGeneratedMsg{
+					oldBranchName: oldBranch,
+					worktreePath:  worktreePath,
+					err:           fmt.Errorf("failed to create AI client: %w", err),
+				}
 			}
 		}
 
@@ -1284,11 +1367,35 @@ func (m Model) generateBranchNameForPR(worktreePath, oldBranch, baseBranch strin
 			}
 		}
 
-		// Call AI
-		model := m.configManager.GetOpenRouterModel()
-		client := openrouter.NewClient(apiKey, model)
+		// Call AI API
 		customPrompt := m.configManager.GetBranchNamePrompt()
 		newName, err := client.GenerateBranchName(diff, customPrompt)
+		if err != nil {
+			// Try fallback provider
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				fallbackClient, fallbackErr := openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if fallbackErr == nil {
+					newName, err = fallbackClient.GenerateBranchName(diff, customPrompt)
+					if err == nil {
+						// Successfully used fallback - return result
+						return prBranchNameGeneratedMsg{
+							oldBranchName: oldBranch,
+							newBranchName: newName,
+							worktreePath:  worktreePath,
+							err:           nil,
+						}
+					}
+					// Fallback also failed, continue to error below
+				}
+			}
+			return prBranchNameGeneratedMsg{
+				oldBranchName: oldBranch,
+				newBranchName: newName,
+				worktreePath:  worktreePath,
+				err:           err,
+			}
+		}
 
 		return prBranchNameGeneratedMsg{
 			oldBranchName: oldBranch,
@@ -1350,12 +1457,36 @@ func (m Model) renameBranchForPR(oldName, newName, worktreePath string) tea.Cmd 
 // generatePRContent generates AI-powered PR title and description
 func (m Model) generatePRContent(worktreePath, branchName, baseBranch string) tea.Cmd {
 	return func() tea.Msg {
-		apiKey := m.configManager.GetOpenRouterAPIKey()
-		if apiKey == "" {
+		// Get active AI provider profile
+		profile := m.configManager.GetActiveProviderProfile(m.repoPath)
+		if profile == nil {
 			return prContentGeneratedMsg{
 				worktreePath: worktreePath,
 				branch:       branchName,
-				err:          fmt.Errorf("API key not configured"),
+				err:          fmt.Errorf("AI provider not configured. Please configure an AI provider in settings"),
+			}
+		}
+
+		// Create AI client
+		client, err := openai.NewClient(profile.APIKey, profile.BaseURL, profile.Model)
+		if err != nil {
+			// Try fallback provider
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				client, err = openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if err != nil {
+					return prContentGeneratedMsg{
+						worktreePath: worktreePath,
+						branch:       branchName,
+						err:          fmt.Errorf("failed to create fallback AI client: %w", err),
+					}
+				}
+			} else {
+				return prContentGeneratedMsg{
+					worktreePath: worktreePath,
+					branch:       branchName,
+					err:          fmt.Errorf("failed to create AI client: %w", err),
+				}
 			}
 		}
 
@@ -1378,11 +1509,37 @@ func (m Model) generatePRContent(worktreePath, branchName, baseBranch string) te
 			}
 		}
 
-		// Call AI to generate title and description
-		model := m.configManager.GetOpenRouterModel()
-		client := openrouter.NewClient(apiKey, model)
+		// Call AI API to generate title and description
 		customPrompt := m.configManager.GetPRPrompt()
 		title, description, err := client.GeneratePRContent(diff, customPrompt)
+		if err != nil {
+			// Try fallback provider
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				fallbackClient, fallbackErr := openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if fallbackErr == nil {
+					title, description, err = fallbackClient.GeneratePRContent(diff, customPrompt)
+					if err == nil {
+						// Successfully used fallback - return result
+						return prContentGeneratedMsg{
+							title:        title,
+							description:  description,
+							worktreePath: worktreePath,
+							branch:       branchName,
+							err:          nil,
+						}
+					}
+					// Fallback also failed, continue to error below
+				}
+			}
+			return prContentGeneratedMsg{
+				title:        title,
+				description:  description,
+				worktreePath: worktreePath,
+				branch:       branchName,
+				err:          err,
+			}
+		}
 
 		return prContentGeneratedMsg{
 			title:        title,
@@ -1394,23 +1551,52 @@ func (m Model) generatePRContent(worktreePath, branchName, baseBranch string) te
 	}
 }
 
-// testOpenRouterAPIKey tests the OpenRouter API key to verify it works
-func (m Model) testOpenRouterAPIKey(apiKey, model string) tea.Cmd {
+// testConnection tests the AI provider connection to verify it works
+func (m Model) testConnection(apiKey, baseURL, model string) tea.Cmd {
 	return func() tea.Msg {
 		if apiKey == "" {
 			return apiKeyTestedMsg{success: false, err: fmt.Errorf("API key is empty")}
 		}
 
 		// Create a test client and make a simple API call
-		client := openrouter.NewClient(apiKey, model)
+		client, err := openai.NewClient(apiKey, baseURL, model)
+		if err != nil {
+			// Try fallback provider if primary fails
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				client, err = openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if err != nil {
+					return apiKeyTestedMsg{success: false, err: fmt.Errorf("failed to create fallback AI client: %w", err)}
+				}
+				// Use fallback for test
+				apiKey = fallback.APIKey
+				baseURL = fallback.BaseURL
+				model = fallback.Model
+			} else {
+				return apiKeyTestedMsg{success: false, err: err}
+			}
+		}
 
 		// Make a simple test prompt - use empty custom prompt to use default
 		testStatus := "test status"
 		testDiff := "test content"
 		testBranch := "test-branch"
 		testLog := "test commit"
-		_, err := client.GenerateCommitMessage(testStatus, testDiff, testBranch, testLog, "")
+		_, err = client.GenerateCommitMessage(testStatus, testDiff, testBranch, testLog, "")
 		if err != nil {
+			// Try fallback provider if primary test fails
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				fallbackClient, fallbackErr := openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if fallbackErr == nil {
+					_, err = fallbackClient.GenerateCommitMessage(testStatus, testDiff, testBranch, testLog, "")
+					if err == nil {
+						// Fallback test succeeded
+						return apiKeyTestedMsg{success: true, err: nil}
+					}
+					// Fallback also failed
+				}
+			}
 			return apiKeyTestedMsg{success: false, err: err}
 		}
 
@@ -1510,12 +1696,36 @@ func (m Model) fetchRemoteForPR(worktreePath string) tea.Cmd {
 // generateBranchNameForPush generates an AI branch name for push operation
 func (m Model) generateBranchNameForPush(worktreePath, oldBranch, baseBranch string) tea.Cmd {
 	return func() tea.Msg {
-		apiKey := m.configManager.GetOpenRouterAPIKey()
-		if apiKey == "" {
+		// Get active AI provider profile
+		profile := m.configManager.GetActiveProviderProfile(m.repoPath)
+		if profile == nil {
 			return pushBranchNameGeneratedMsg{
 				oldBranchName: oldBranch,
 				worktreePath:  worktreePath,
-				err:           fmt.Errorf("API key not configured"),
+				err:           fmt.Errorf("AI provider not configured. Please configure an AI provider in settings"),
+			}
+		}
+
+		// Create AI client
+		client, err := openai.NewClient(profile.APIKey, profile.BaseURL, profile.Model)
+		if err != nil {
+			// Try fallback provider
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				client, err = openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if err != nil {
+					return pushBranchNameGeneratedMsg{
+						oldBranchName: oldBranch,
+						worktreePath:  worktreePath,
+						err:           fmt.Errorf("failed to create fallback AI client: %w", err),
+					}
+				}
+			} else {
+				return pushBranchNameGeneratedMsg{
+					oldBranchName: oldBranch,
+					worktreePath:  worktreePath,
+					err:           fmt.Errorf("failed to create AI client: %w", err),
+				}
 			}
 		}
 
@@ -1538,11 +1748,35 @@ func (m Model) generateBranchNameForPush(worktreePath, oldBranch, baseBranch str
 			}
 		}
 
-		// Call AI
-		model := m.configManager.GetOpenRouterModel()
-		client := openrouter.NewClient(apiKey, model)
+		// Call AI API
 		customPrompt := m.configManager.GetBranchNamePrompt()
 		newName, err := client.GenerateBranchName(diff, customPrompt)
+		if err != nil {
+			// Try fallback provider
+			fallback := m.configManager.GetFallbackProviderProfile(m.repoPath)
+			if fallback != nil {
+				fallbackClient, fallbackErr := openai.NewClient(fallback.APIKey, fallback.BaseURL, fallback.Model)
+				if fallbackErr == nil {
+					newName, err = fallbackClient.GenerateBranchName(diff, customPrompt)
+					if err == nil {
+						// Successfully used fallback - return result
+						return pushBranchNameGeneratedMsg{
+							oldBranchName: oldBranch,
+							newBranchName: newName,
+							worktreePath:  worktreePath,
+							err:           nil,
+						}
+					}
+					// Fallback also failed, continue to error below
+				}
+			}
+			return pushBranchNameGeneratedMsg{
+				oldBranchName: oldBranch,
+				newBranchName: newName,
+				worktreePath:  worktreePath,
+				err:           err,
+			}
+		}
 
 		return pushBranchNameGeneratedMsg{
 			oldBranchName: oldBranch,
