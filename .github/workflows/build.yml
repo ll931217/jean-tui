@@ -1,0 +1,58 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: ''
+          - goos: linux
+            goarch: arm64
+            suffix: '-arm64'
+          - goos: darwin
+            goarch: amd64
+            suffix: '-macos-amd64'
+          - goos: darwin
+            goarch: arm64
+            suffix: '-macos-arm64'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: |
+          BINARY_NAME=jean${{ matrix.suffix }}
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+            -ldflags="-s -w" \
+            -o $BINARY_NAME \
+            ./main.go
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jean-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: jean*
+          retention-days: 7
