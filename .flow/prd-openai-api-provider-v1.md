@@ -2,7 +2,7 @@
 prd:
   version: v1
   feature_name: openai-api-provider
-  status: approved
+  status: implemented
 git:
   branch: feat-llm-integration
   branch_type: feature
