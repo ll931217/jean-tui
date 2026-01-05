@@ -17,7 +17,9 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) and designed
 ## Features
 
 - **Git Worktree Management** - Create, switch, and delete worktrees with single keystrokes
-- **AI-Powered Workflow** - Auto-generate commit messages, branch names, and PR content (11+ AI models)
+- **AI-Powered Workflow** - Auto-generate commit messages, branch names, and PR content with OpenAI-compatible APIs
+- **Multi-Provider AI Support** - Configure OpenAI, Azure OpenAI, or custom OpenAI-compatible endpoints (Ollama, local LLMs)
+- **Provider Profiles** - Save multiple AI provider configurations with fallback support
 - **GitHub PR Automation** - Create draft PRs, browse PRs, merge with strategy selection
 - **Tmux Sessions** - Persistent Claude CLI and terminal sessions per worktree
 - **5 Themes** - Matrix, Coolify, Dracula, Nord, Solarized with dynamic switching
@@ -125,8 +127,76 @@ Settings stored in `~/.config/jean/config.json` per repository:
 - **Base branch** - Default branch for new worktrees
 - **Editor** - Preferred IDE (code, cursor, nvim, vim, subl, atom, zed)
 - **Theme** - Visual theme (press `s` → Theme to change)
-- **AI Settings** - OpenRouter API key, model selection, feature toggles
+- **AI Provider Profiles** - Configure OpenAI-compatible API providers
 - **Debug logs** - Enable logging to `/tmp/jean-debug.log`
+
+### AI Provider Configuration
+
+jean supports OpenAI-compatible API providers for AI-powered features:
+
+**Supported Providers:**
+- **OpenAI** - Official OpenAI API (GPT-4, GPT-3.5, etc.)
+- **Azure OpenAI** - Azure OpenAI Service
+- **Custom Endpoints** - Any OpenAI-compatible API (Ollama, vLLM, LM Studio, local servers)
+
+**Configuration Steps:**
+
+1. Press `s` → **AI Providers** in the TUI
+2. Create a new provider profile with:
+   - **Name**: Display name for the profile
+   - **Type**: OpenAI, Azure, or Custom
+   - **Base URL**: API endpoint URL
+   - **API Key**: Authentication key
+   - **Model**: Model to use (e.g., `gpt-4`, `gpt-3.5-turbo`)
+3. Set as **Active Provider** to use for AI features
+4. Optionally set a **Fallback Provider** for automatic failover
+
+**Example Configuration:**
+
+```json
+{
+  "repositories": {
+    "/path/to/repo": {
+      "base_branch": "main",
+      "editor": "code",
+      "ai_provider": {
+        "profiles": {
+          "openai-gpt4": {
+            "name": "OpenAI GPT-4",
+            "type": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-...",
+            "model": "gpt-4"
+          },
+          "ollama-local": {
+            "name": "Ollama Local",
+            "type": "custom",
+            "base_url": "http://localhost:11434/v1",
+            "api_key": "ollama",
+            "model": "llama2"
+          },
+          "azure-openai": {
+            "name": "Azure OpenAI",
+            "type": "azure",
+            "base_url": "https://your-resource.openai.azure.com/openai/deployments/your-deployment",
+            "api_key": "your-azure-key",
+            "model": "gpt-4"
+          }
+        },
+        "active_profile": "openai-gpt4",
+        "fallback_profile": "ollama-local"
+      }
+    }
+  }
+}
+```
+
+**AI Features:**
+- **Commit Messages** (`c` key) - Generate conventional commit messages from git diff
+- **Branch Names** (`p` key) - Generate semantic branch names
+- **PR Content** (`P` key) - Generate PR titles and descriptions
+
+All AI features automatically use the active provider and fall back to the fallback provider if the primary fails.
 
 ### Tmux Configuration
 
@@ -215,7 +285,7 @@ go run main.go -path /path/to/test/repo
 - `session/` - Tmux session management
 - `config/` - Configuration management
 - `github/` - GitHub PR operations
-- `openrouter/` - AI integration
+- `openai/` - OpenAI-compatible API integration
 
 For detailed architecture and development guides, see [CLAUDE.md](./CLAUDE.md).
 

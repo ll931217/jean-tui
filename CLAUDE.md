@@ -90,8 +90,12 @@ The application follows a clean separation of concerns:
   - `config.go`: Manages base branch settings per repository in `~/.config/jean/config.json`
 - **github/**: GitHub PR operations
   - `pr.go`: PR creation, listing, merging via gh CLI
-- **openrouter/**: AI integration
-  - `client.go`: OpenRouter API client for commit messages, branch names, PR content generation
+- **openai/**: OpenAI-compatible API integration
+  - `provider.go`: Provider types (openai, azure, custom) and configuration
+  - `client.go`: HTTP client for chat completions
+  - `models.go`: Predefined model lists
+  - `prompts.go`: Default prompts for AI generation
+  - `errors.go`: Error handling with wrapping
 - **install/**: Installation utilities and shell wrapper templates
   - `templates.go`: Embedded shell wrapper templates (BashZshWrapper, FishWrapper) compiled into binary
 
@@ -155,8 +159,11 @@ Tmux integration:
 
 #### config/config.go
 Configuration management:
-- `Config` struct: Stores repository-specific settings
-- `RepoConfig` struct: Base branch, editor, last selected branch
+- `Config` struct: Stores repository-specific and global settings
+- `RepoConfig` struct: Base branch, editor, AI provider configuration per repository
+- `AIProviderProfile` struct: Individual AI provider profile configuration (name, type, base URL, API key, model)
+- `AIProviderConfig` struct: Collection of profiles with active and fallback selection
+- `AIPrompts` struct: Customizable AI prompts for commit messages, branch names, PR content
 - `LoadConfig()`: Read from `~/.config/jean/config.json`
 - `SaveConfig()`: Persist configuration changes
 - `GetBaseBranch()`: Get base branch for repository
@@ -165,6 +172,48 @@ Configuration management:
 - `SetEditor()`: Update editor preference
 - `GetLastSelectedBranch()`: Get last selected branch for auto-restore
 - `SetLastSelectedBranch()`: Save last selected branch
+- AI provider profile CRUD operations: `AddAIProviderProfile()`, `UpdateAIProviderProfile()`, `DeleteAIProviderProfile()`, `GetAIProviderProfile()`
+- Active/fallback provider management: `SetActiveAIProvider()`, `SetFallbackAIProvider()`, `GetActiveAIProvider()`, `GetFallbackAIProvider()`
+
+#### openai/client.go
+OpenAI-compatible API client:
+- `Client` struct: HTTP client with API key, model, and base URL
+- `NewClient()`: Create new client with configuration
+- `GenerateCommitMessage()`: Generate conventional commit message from git diff
+- `GenerateBranchName()`: Generate semantic branch name from changes
+- `GeneratePRContent()`: Generate PR title and description from diff
+- `callAPI()`: Internal method for HTTP requests to OpenAI-compatible endpoints
+- Automatic fallback support: Client can be created from provider profiles with fallback
+
+#### openai/provider.go
+Provider types and configuration:
+- `ProviderType` enum: openai, azure, custom
+- `DefaultBaseURL()`: Get default base URL for provider type
+- `ProviderConfig` struct: Configuration for a single provider
+- `NewProviderConfig()`: Create provider config with defaults
+- `GetEffectiveBaseURL()`: Get base URL with fallback to default
+
+#### openai/models.go
+Predefined model lists:
+- `OpenAIModels`: Official OpenAI models (gpt-4, gpt-3.5-turbo, etc.)
+- `AzureModels`: Azure OpenAI models
+- `CustomModelsPlaceholder`: Placeholder for custom model input
+- `GetModelsForProvider()`: Get available models for a provider type
+
+#### openai/prompts.go
+Default AI prompts:
+- `DefaultCommitPrompt`: Template for commit message generation
+- `DefaultBranchNamePrompt`: Template for branch name generation
+- `DefaultPRContentPrompt`: Template for PR content generation
+- Supports placeholders: {status}, {diff}, {branch}, {log}
+
+#### openai/errors.go
+Error handling:
+- `APIError` struct: OpenAI API error response
+- `ProviderError` type: Custom error type with wrapping
+- `NewConfigError()`: Create configuration validation error
+- `NewAPIError()`: Create API error from response
+- `WrapError()`: Wrap errors with context
 
 ### Key Architectural Patterns
 
@@ -193,6 +242,8 @@ Configuration management:
 - `editorSelectModal`: Select preferred editor for opening worktrees
 - `settingsModal`: Configure application settings
 - `tmuxConfigModal`: Install/update/remove tmux configuration
+- `aiProvidersModal`: Manage AI provider profiles (list, create, edit, delete, test)
+- `aiProviderEditModal`: Create or edit AI provider profile with form fields
 
 **Session Naming**: Tmux session names are sanitized from branch names:
 - Claude sessions: `jean-<sanitized-branch-name>`
@@ -216,6 +267,7 @@ Configuration management:
 
 **User Config Location**: `~/.config/jean/config.json`
 - Stores per-repository settings and integration configs
+- Global settings for AI features and themes
 - Complete JSON structure:
 ```json
 {
@@ -224,24 +276,79 @@ Configuration management:
       "base_branch": "main",
       "editor": "code",
       "last_selected_branch": "feature/my-branch",
-      "openrouter_api_key": "sk-...",
-      "openrouter_model": "gpt-4-turbo",
-      "ai_commit_enabled": true,
-      "ai_branch_name_enabled": true,
-      "debug_logging_enabled": false,
       "theme": "matrix",
-      "auto_fetch_interval": "10s",
+      "auto_fetch_interval": 10,
+      "pr_default_state": "draft",
       "prs": {
-        "feature-branch": "https://github.com/owner/repo/pull/123"
+        "feature-branch": [{
+          "url": "https://github.com/owner/repo/pull/123",
+          "status": "open",
+          "created_at": "2024-01-15T10:30:00Z",
+          "branch": "feature-branch",
+          "pr_number": 123,
+          "title": "Add new feature",
+          "author": "username"
+        }]
       },
-      "claude_initialized": {
+      "initialized_claudes": {
         "main": true,
         "feature-branch": true
+      },
+      "ai_provider": {
+        "profiles": {
+          "openai-gpt4": {
+            "name": "OpenAI GPT-4",
+            "type": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-...",
+            "model": "gpt-4"
+          },
+          "ollama-local": {
+            "name": "Ollama Local",
+            "type": "custom",
+            "base_url": "http://localhost:11434/v1",
+            "api_key": "ollama",
+            "model": "llama2"
+          }
+        },
+        "active_profile": "openai-gpt4",
+        "fallback_profile": "ollama-local"
       }
     }
-  }
+  },
+  "default_theme": "matrix",
+  "ai_commit_enabled": true,
+  "ai_branch_name_enabled": true,
+  "debug_logging_enabled": false,
+  "ai_prompts": {
+    "commit_message": "Generate a conventional commit message...",
+    "branch_name": "Generate a semantic branch name...",
+    "pr_content": "Generate PR title and description..."
+  },
+  "wrapper_checksums": {
+    "bash": "sha256-checksum",
+    "zsh": "sha256-checksum",
+    "fish": "sha256-checksum"
+  },
+  "onboarded": true
 }
 ```
+
+**AI Provider Configuration**:
+- Provider profiles stored per-repository in `ai_provider` field
+- Three provider types: `openai` (official OpenAI), `azure` (Azure OpenAI), `custom` (any OpenAI-compatible endpoint)
+- Each profile has: name, type, base_url, api_key, model
+- Active provider: Used for all AI features (commit messages, branch names, PR content)
+- Fallback provider: Automatically used if active provider fails
+- Provider profiles can be created, edited, deleted, and tested via TUI (`s` → AI Providers)
+- Test connection feature validates API credentials and connectivity
+
+**Custom AI Prompts**:
+- Global customization via `ai_prompts` field
+- Supports three prompt types: commit_message, branch_name, pr_content
+- Prompts support placeholders: `{status}`, `{diff}`, `{branch}`, `{log}`
+- Default prompts defined in `openai/prompts.go`
+- Overrides default behavior for all repositories
 
 **Base Branch Logic**:
 1. Check saved config for repository
@@ -299,17 +406,18 @@ Key external dependencies:
 
 ## New Features (Latest Implementation)
 
-### AI Integration (OpenRouter) ✅
-**Files**: `openrouter/client.go`, `tui/model.go`, `config/config.go`
+### AI Integration (OpenAI-Compatible APIs) ✅
+**Files**: `openai/client.go`, `openai/provider.go`, `openai/models.go`, `openai/prompts.go`, `openai/errors.go`, `tui/model.go`, `config/config.go`
 
 **Features**:
 1. **AI Commit Message Generation** (tui/model.go:976-1003)
    - Automatically generates conventional commit messages from git diff
    - Triggered by pressing `c` with AI enabled in settings
    - Shows spinner animation during generation
-   - Supports 11 AI models via OpenRouter (Gemini, Claude, GPT-4, Llama, etc.)
-   - Falls back to empty message if generation fails
-   - Requires API key configuration in AI Settings modal
+   - Supports any OpenAI-compatible API provider
+   - Automatic fallback to fallback provider if primary fails
+   - Falls back to empty message if all providers fail
+   - Requires provider configuration via Settings → AI Providers
 
 2. **AI Branch Name Generation** (tui/model.go:1005-1084)
    - Generates semantic branch names from git changes
@@ -325,12 +433,33 @@ Key external dependencies:
    - Modal-based editing with Tab navigation
    - Can be retried automatically on PR creation conflicts
 
+**Provider System**:
+- **Multi-Provider Support**: Configure multiple AI provider profiles
+- **Provider Types**:
+  - `openai`: Official OpenAI API (https://api.openai.com/v1)
+  - `azure`: Azure OpenAI Service (custom endpoint URL)
+  - `custom`: Any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, local servers)
+- **Provider Profiles**: Each profile has name, type, base URL, API key, and model
+- **Active Provider**: Primary provider used for all AI features
+- **Fallback Provider**: Automatic failover if active provider fails
+- **Test Connection**: Validate provider credentials and connectivity
+
 **Configuration**:
-- API Key: Stored in config with `openrouter_api_key` field
-- Model Selection: Choose from 11+ models via settings
-- Toggles: `ai_commit_enabled` and `ai_branch_name_enabled` flags
-- Test API key function in AI Settings modal
-- Models include: GPT-4, Claude 3 Opus, Gemini Pro, Llama 2, and more
+- Provider profiles stored per-repository in `ai_provider` field
+- Manage providers via TUI: Settings → AI Providers
+- Create, edit, delete, and test provider profiles
+- Set active and fallback providers
+- Global toggles: `ai_commit_enabled` and `ai_branch_name_enabled` flags
+- Custom prompts: Override default prompts via `ai_prompts` global config
+
+**Implementation Details**:
+- `openai/client.go`: Generic OpenAI-compatible HTTP client
+- `openai/provider.go`: Provider type definitions and configuration
+- `openai/models.go`: Predefined model lists for each provider type
+- `openai/prompts.go`: Default prompt templates with placeholder support
+- `openai/errors.go`: Structured error handling with context wrapping
+- Provider profile CRUD operations in `config/config.go`
+- TUI modals for provider management in `tui/update.go` and `tui/view.go`
 
 ### GitHub PR Integration ✅
 **Files**: `github/pr.go`, `tui/model.go`, `tui/view.go`, `tui/update.go`
