@@ -418,6 +418,7 @@ func (m Model) renderMinimalHelpBar() string {
 		"P create PR",
 		"L local merge",
 		"g github",
+		"E edit config",
 		"h help",
 		"q quit",
 	}
@@ -483,6 +484,10 @@ func (m Model) renderModal() string {
 		return m.renderHooksModal()
 	case hookEditModal:
 		return m.renderHookEditModal()
+	case configScopeSelectModal:
+		return m.renderConfigScopeSelectModal()
+	case configEditorModal:
+		return m.renderConfigEditorModal()
 	case prStateSettingsModal:
 		return m.renderPRStateSettingsModal()
 	case tmuxConfigModal:
@@ -2145,6 +2150,7 @@ func (m Model) renderHelperModal() string {
 			}{
 				{"s", "Open settings"},
 				{"e", "Select default editor"},
+				{"E", "Edit config file (external editor)"},
 				{"S", "View tmux sessions"},
 				{"h", "Show this help"},
 				{"q", "Quit application"},
@@ -2988,4 +2994,88 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// renderConfigScopeSelectModal renders the config scope selection modal
+func (m Model) renderConfigScopeSelectModal() string {
+	var b strings.Builder
+
+	b.WriteString(modalTitleStyle.Render("Select Config Scope"))
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("Choose which configuration to edit"))
+	b.WriteString("\n\n")
+
+	// Display scope options
+	for i, scope := range m.configScopeOptions {
+		var scopeName, scopeDesc string
+		var isSelected bool
+
+		switch scope {
+		case config.ScopeGlobal:
+			scopeName = "Global Configuration"
+			scopeDesc = fmt.Sprintf("Edit: ~/.config/jean/config.json")
+			isSelected = (i == m.configScopeIndex)
+		case config.ScopeRepo:
+			scopeName = "Repository Configuration"
+			scopeDesc = "Edit repo-specific settings (in same file)"
+			isSelected = (i == m.configScopeIndex)
+		}
+
+		cursor := " "
+		if isSelected {
+			cursor = selectedItemStyle.Render("→")
+			b.WriteString(selectedItemStyle.Render(fmt.Sprintf("%s %s\n", cursor, scopeName)))
+		} else {
+			b.WriteString(fmt.Sprintf("%s %s\n", cursor, scopeName))
+		}
+		b.WriteString(helpStyle.Render(fmt.Sprintf("    %s\n", scopeDesc)))
+	}
+
+	b.WriteString("\n")
+
+	// Define local style variables for buttons
+	cancelStyle := normalItemStyle
+	confirmStyle := normalItemStyle
+
+	buttons := fmt.Sprintf("%s %s",
+		helpStyle.Render("[↑/↓] Select"),
+		confirmStyle.Render("[Enter] Edit"),
+	)
+	buttons += " " + cancelStyle.Render("[Esc] Cancel")
+
+	b.WriteString(buttons)
+
+	// Center the modal
+	content := modalStyle.Width(50).Render(b.String())
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		content,
+	)
+}
+
+// renderConfigEditorModal renders the config editor modal (shown while editor is running)
+func (m Model) renderConfigEditorModal() string {
+	var b strings.Builder
+
+	b.WriteString(modalTitleStyle.Render("Config Editor"))
+	b.WriteString("\n\n")
+
+	if m.configEditorInProgress {
+		b.WriteString(helpStyle.Render("External editor is running..."))
+		b.WriteString("\n\n")
+		b.WriteString(helpStyle.Render(fmt.Sprintf("Editor: %s", m.configEditorScope)))
+		b.WriteString("\n\n")
+		b.WriteString(helpStyle.Render("Close the editor when finished editing"))
+	} else {
+		b.WriteString(helpStyle.Render("Editor closed."))
+	}
+
+	// Center the modal
+	content := modalStyle.Width(40).Render(b.String())
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		content,
+	)
 }

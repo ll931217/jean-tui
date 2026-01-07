@@ -144,6 +144,11 @@ func (m *Manager) save() error {
 	return os.WriteFile(m.configPath, data, 0644)
 }
 
+// Reload reloads the configuration from disk
+func (m *Manager) Reload() error {
+	return m.load()
+}
+
 // GetBaseBranch returns the base branch for a repository
 func (m *Manager) GetBaseBranch(repoPath string) string {
 	if repo, ok := m.config.Repositories[repoPath]; ok {
