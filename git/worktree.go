@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coollabsio/jean-tui/config"
+	"github.com/coollabsio/jean-tui/hooks"
 )
 
 // Worktree represents a Git worktree
@@ -27,16 +28,33 @@ type Worktree struct {
 	PRs               interface{}      // []config.PRInfo - Pull requests for this branch (loaded from config)
 	LastModified      time.Time        // Last modification time of the worktree directory
 	ClaudeSessionName string           // Sanitized tmux session name for Claude (e.g., "jean-feature-add-status")
+	// Beads integration
+	OpenIssues   int  `json:"-"` // Number of open beads issues
+	ClosedIssues int  `json:"-"` // Number of closed beads issues
+	HasBeads     bool `json:"-"` // Whether beads is initialized for this worktree
+	// Enhanced info
+	AIWaiting bool   `json:"-"` // Whether AI session is waiting for input
+	Ports     []int  `json:"-"` // Active ports parsed from config files
 }
 
 // Manager handles Git worktree operations
 type Manager struct {
-	repoPath string
+	repoPath       string
+	configManager  *config.Manager  // Optional config manager for hooks
+	hooksExecutor  *hooks.Executor  // Optional hooks executor
 }
 
 // NewManager creates a new worktree manager
 func NewManager(repoPath string) *Manager {
 	return &Manager{repoPath: repoPath}
+}
+
+// SetConfigManager sets the config manager for hooks support
+func (m *Manager) SetConfigManager(cm *config.Manager) {
+	m.configManager = cm
+	if cm != nil {
+		m.hooksExecutor = hooks.NewExecutor(m.repoPath)
+	}
 }
 
 // List returns all worktrees in the repository with status relative to the base branch
@@ -275,6 +293,7 @@ func (m *Manager) Create(path, branch string, newBranch bool, baseBranch string)
 
 	args := []string{"-C", m.repoPath, "worktree", "add"}
 	workspacePath := path // May be adjusted below
+	branchName := branch  // May be adjusted below
 
 	if newBranch {
 		args = append(args, "-b", branch)
@@ -291,6 +310,7 @@ func (m *Manager) Create(path, branch string, newBranch bool, baseBranch string)
 		}
 		// Use --track flag to create local tracking branch (either new or unique name)
 		args = append(args, "--track", "-b", localBranch)
+		branchName = localBranch // Update branch name for hooks
 	}
 
 	args = append(args, workspacePath)
@@ -302,14 +322,117 @@ func (m *Manager) Create(path, branch string, newBranch bool, baseBranch string)
 		args = append(args, baseBranch)
 	}
 
+	// Execute pre_create hooks (blocking - if they fail, abort worktree creation)
+	ctx := m.getHookContext(workspacePath, branchName)
+	if err := m.executeHooksByName("pre_create", ctx, true); err != nil {
+		return err
+	}
+
 	cmd := exec.Command("git", args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to create worktree: %s", string(output))
 	}
 
+	// Execute post_create hooks (non-blocking - errors are warnings)
+	m.executeHooksByName("post_create", ctx, false)
+
 	// Execute setup script if configured (non-blocking - errors are returned but don't prevent worktree usage)
 	if err := m.executeSetupScript(workspacePath); err != nil {
 		return fmt.Errorf("setup script failed: %w", err)
+	}
+
+	return nil
+}
+
+// getHookContext builds a HookContext for template expansion in hooks
+func (m *Manager) getHookContext(workspacePath, branchName string) hooks.HookContext {
+	// Get current user
+	user := os.Getenv("USER")
+	if user == "" {
+		user = os.Getenv("USERNAME")
+	}
+	if user == "" {
+		user = "unknown"
+	}
+
+	// Get repository root path
+	repoRoot, _ := m.GetRepoRoot()
+
+	return hooks.HookContext{
+		WorkspacePath: workspacePath,
+		RootPath:      repoRoot,
+		BranchName:    branchName,
+		WorktreeName:  filepath.Base(workspacePath),
+		Timestamp:     time.Now().Format(time.RFC3339),
+		User:          user,
+	}
+}
+
+// executeHooksByName executes hooks of a specific type
+// hookType should be: "pre_create", "post_create", "pre_delete", "post_delete", "on_switch"
+// isPreHook determines if hook failures should be blocking (true) or warnings (false)
+func (m *Manager) executeHooksByName(hookType string, ctx hooks.HookContext, isPreHook bool) error {
+	if m.configManager == nil || m.hooksExecutor == nil {
+		return nil // No hooks configured
+	}
+
+	hooksConfig := m.configManager.GetHooks(m.repoPath)
+	if hooksConfig == nil {
+		return nil // No hooks configured
+	}
+
+	// Get hooks for the specified type
+	var hookList []config.Hook
+	switch hookType {
+	case "pre_create":
+		hookList = hooksConfig.PreCreate
+	case "post_create":
+		hookList = hooksConfig.PostCreate
+	case "pre_delete":
+		hookList = hooksConfig.PreDelete
+	case "post_delete":
+		hookList = hooksConfig.PostDelete
+	case "on_switch":
+		hookList = hooksConfig.OnSwitch
+	default:
+		return nil
+	}
+
+	// Separate sync and async hooks
+	var syncHooks []hooks.Hook
+	var asyncHooks []hooks.Hook
+
+	for _, h := range hookList {
+		if !h.Enabled {
+			continue
+		}
+		hook := hooks.Hook{
+			Name:     h.Name,
+			Command:  h.Command,
+			Enabled:  h.Enabled,
+			RunAsync: h.RunAsync,
+		}
+		if h.RunAsync {
+			asyncHooks = append(asyncHooks, hook)
+		} else {
+			syncHooks = append(syncHooks, hook)
+		}
+	}
+
+	// Execute sync hooks first (blocking)
+	for _, hook := range syncHooks {
+		if err := m.hooksExecutor.ExecuteHook(hook, ctx); err != nil {
+			if isPreHook {
+				return fmt.Errorf("pre-hook '%s' failed: %w", hook.Name, err)
+			}
+			// For post-hooks, log warning but don't block
+			fmt.Fprintf(os.Stderr, "Warning: post-hook '%s' failed: %v\n", hook.Name, err)
+		}
+	}
+
+	// Execute async hooks in background (non-blocking)
+	if len(asyncHooks) > 0 {
+		m.hooksExecutor.ExecuteHooksAsync(asyncHooks, ctx)
 	}
 
 	return nil
@@ -365,6 +488,12 @@ func (m *Manager) Remove(path string, force bool) error {
 		branchName = ""
 	}
 
+	// Execute pre_delete hooks (blocking - if they fail, abort worktree removal)
+	ctx := m.getHookContext(path, branchName)
+	if err := m.executeHooksByName("pre_delete", ctx, true); err != nil {
+		return err
+	}
+
 	// Remove the worktree
 	args := []string{"-C", m.repoPath, "worktree", "remove"}
 
@@ -378,6 +507,9 @@ func (m *Manager) Remove(path string, force bool) error {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to remove worktree: %s", string(output))
 	}
+
+	// Execute post_delete hooks (non-blocking - errors are warnings)
+	m.executeHooksByName("post_delete", ctx, false)
 
 	// Delete the branch if it's not a protected base branch
 	if branchName != "" && !isProtectedBranch(branchName) {
@@ -408,6 +540,14 @@ func isProtectedBranch(branchName string) bool {
 		}
 	}
 	return false
+}
+
+// ExecuteOnSwitchHooks executes on-switch hooks for a worktree
+// This is a public method that can be called from the TUI layer
+func (m *Manager) ExecuteOnSwitchHooks(workspacePath, branchName string) error {
+	ctx := m.getHookContext(workspacePath, branchName)
+	// on-switch hooks are non-blocking (warnings only)
+	return m.executeHooksByName("on_switch", ctx, false)
 }
 
 // MoveWorktree moves a worktree to a new location using git worktree move

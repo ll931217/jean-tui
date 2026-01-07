@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/coollabsio/jean-tui/config"
 	"github.com/coollabsio/jean-tui/internal/version"
+	"github.com/coollabsio/jean-tui/util"
 )
 
 // View renders the TUI
@@ -134,6 +135,12 @@ func (m Model) renderWorktreeList() string {
 				behindIndicator := fmt.Sprintf(" ↓%d", wt.BehindCount)
 				line += normalItemStyle.Copy().Foreground(warningColor).Render(behindIndicator)
 			}
+
+			// Show beads issue counts if beads is initialized
+			if wt.HasBeads && (wt.OpenIssues > 0 || wt.ClosedIssues > 0) {
+				beadsIndicator := fmt.Sprintf(" [%d/%d]", wt.OpenIssues, wt.ClosedIssues)
+				line += normalItemStyle.Copy().Foreground(accentColor).Render(beadsIndicator)
+			}
 		}
 
 
@@ -248,6 +255,55 @@ func (m Model) renderDetails() string {
 			if i < len(prs)-1 {
 				b.WriteString(",")
 			}
+			b.WriteString("\n")
+		}
+	}
+
+	// Show Beads issues if beads is initialized for this worktree
+	if wt.HasBeads {
+		b.WriteString("\n")
+		b.WriteString(detailKeyStyle.Render("Beads Issues:"))
+		b.WriteString("\n")
+
+		if wt.OpenIssues == 0 && wt.ClosedIssues == 0 {
+			b.WriteString(normalItemStyle.Copy().Foreground(mutedColor).Render("  No issues found"))
+		} else {
+			if wt.OpenIssues > 0 {
+				b.WriteString(normalItemStyle.Copy().Foreground(warningColor).Render(fmt.Sprintf("  %d open", wt.OpenIssues)))
+				b.WriteString("\n")
+			}
+			if wt.ClosedIssues > 0 {
+				b.WriteString(normalItemStyle.Copy().Foreground(successColor).Render(fmt.Sprintf("  %d closed", wt.ClosedIssues)))
+				b.WriteString("\n")
+			}
+		}
+	}
+
+	// Show AI Status if Claude is waiting for input
+	if wt.AIWaiting {
+		b.WriteString("\n")
+		b.WriteString(detailKeyStyle.Render("AI Status:"))
+		b.WriteString("\n")
+		b.WriteString(normalItemStyle.Copy().Foreground(successColor).Render("  ● Claude is ready"))
+		b.WriteString("\n")
+		b.WriteString(normalItemStyle.Copy().Foreground(accentColor).Render("  Press Enter to respond"))
+		b.WriteString("\n")
+	}
+
+	// Show Active Ports if any were detected
+	if len(wt.Ports) > 0 {
+		b.WriteString("\n")
+		b.WriteString(detailKeyStyle.Render("Active Ports:"))
+		b.WriteString("\n")
+
+		portURLs := util.GetPortURLs(wt.Ports)
+		for i, portURL := range portURLs {
+			serviceName := util.GetPortServiceName(wt.Ports[i])
+			// Render port as clickable link using OSC 8 hyperlinks
+			styledPort := normalItemStyle.Copy().Foreground(accentColor).Underline(true).Render(serviceName)
+			b.WriteString(fmt.Sprintf("  %s ", styledPort))
+			// Add OSC 8 hyperlink codes for the URL
+			b.WriteString(fmt.Sprintf("\033]8;;%s\033\\%s\033]8;;\033\\", portURL, portURL))
 			b.WriteString("\n")
 		}
 	}
@@ -423,6 +479,10 @@ func (m Model) renderModal() string {
 		return m.renderAIProviderListModal()
 	case aiProviderEditModal:
 		return m.renderAIProviderEditModal()
+	case hooksModal:
+		return m.renderHooksModal()
+	case hookEditModal:
+		return m.renderHookEditModal()
 	case prStateSettingsModal:
 		return m.renderPRStateSettingsModal()
 	case tmuxConfigModal:
@@ -1602,6 +1662,23 @@ func (m Model) renderSettingsModal() string {
 				return "Ready for Review"
 			},
 		},
+		{
+			name:        "Hooks",
+			key:         "o",
+			description: "Manage lifecycle hooks (pre/post create, pre/post delete, on-switch)",
+			getCurrent: func() string {
+				if m.configManager != nil {
+					hooksConfig := m.configManager.GetHooks(m.repoPath)
+					if hooksConfig != nil {
+						totalHooks := len(hooksConfig.PreCreate) + len(hooksConfig.PostCreate) +
+							len(hooksConfig.PreDelete) + len(hooksConfig.PostDelete) +
+							len(hooksConfig.OnSwitch)
+						return fmt.Sprintf("%d hook%s configured", totalHooks, pluralize(totalHooks))
+					}
+				}
+				return "No hooks configured"
+			},
+		},
 	}
 
 	// Render settings list
@@ -2685,4 +2762,230 @@ func (m Model) renderAIProviderEditModal() string {
 		lipgloss.Center, lipgloss.Center,
 		content,
 	)
+}
+
+func (m Model) renderHooksModal() string {
+	var b strings.Builder
+
+	b.WriteString(modalTitleStyle.Render("Hooks Management"))
+	b.WriteString("\n\n")
+
+	// Hook types list
+	hookTypeNames := []string{"Pre-Create", "Post-Create", "Pre-Delete", "Post-Delete", "On-Switch"}
+	b.WriteString(helpStyle.Render("Hook Types (↑↓ navigate, Enter to view hooks):\n\n"))
+
+	for i, typeName := range hookTypeNames {
+		prefix := "  "
+		if i == m.hooksSelectedHookType {
+			prefix = selectedItemStyle.Render("▶ ")
+			b.WriteString(prefix + normalItemStyle.Render(typeName))
+		} else {
+			b.WriteString(prefix + normalItemStyle.Render(typeName))
+		}
+
+		// Show count of hooks for this type
+		hookCount := 0
+		if m.configManager != nil {
+			hooksConfig := m.configManager.GetHooks(m.repoPath)
+			if hooksConfig != nil {
+				switch i {
+				case 0:
+					hookCount = len(hooksConfig.PreCreate)
+				case 1:
+					hookCount = len(hooksConfig.PostCreate)
+				case 2:
+					hookCount = len(hooksConfig.PreDelete)
+				case 3:
+					hookCount = len(hooksConfig.PostDelete)
+				case 4:
+					hookCount = len(hooksConfig.OnSwitch)
+				}
+			}
+		}
+
+		countStr := fmt.Sprintf(" (%d hook%s)", hookCount, pluralize(hookCount))
+		b.WriteString(helpStyle.Render(countStr))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+
+	// Hooks list for selected type
+	b.WriteString(helpStyle.Render("Hooks for selected type:\n\n"))
+
+	hooks := m.getHooksForSelectedType()
+	if len(hooks) == 0 {
+		b.WriteString(helpStyle.Render("  No hooks configured for this type.\n"))
+	} else {
+		for i, hook := range hooks {
+			prefix := "  "
+			if i == m.hooksSelectedHook {
+				prefix = selectedItemStyle.Render("▶ ")
+			} else {
+				prefix = "  "
+			}
+
+			// Show hook name and status
+			status := ""
+			if !hook.Enabled {
+				status = helpStyle.Render(" (disabled)")
+			}
+			if hook.RunAsync {
+				if status == "" {
+					status = helpStyle.Render(" (async)")
+				} else {
+					status += helpStyle.Render(", async")
+				}
+			}
+
+			b.WriteString(prefix + normalItemStyle.Render(hook.Name) + status + "\n")
+			// Show command in dim style
+			b.WriteString("    " + helpStyle.Render(truncateString(hook.Command, 60)) + "\n")
+		}
+	}
+
+	b.WriteString("\n")
+
+	// Buttons
+	newStyle := buttonStyle
+	editStyle := buttonStyle
+	deleteStyle := buttonStyle
+	cancelStyle := cancelButtonStyle
+
+	// Highlight appropriate buttons based on state
+	if len(hooks) > 0 {
+		editStyle = selectedButtonStyle
+		deleteStyle = selectedButtonStyle
+	} else {
+		newStyle = selectedButtonStyle
+	}
+
+	buttons := fmt.Sprintf("%s  %s  %s  %s",
+		newStyle.Render("[N]ew"),
+		editStyle.Render("[E]dit"),
+		deleteStyle.Render("[D]elete"),
+		cancelStyle.Render("[Esc] Cancel"),
+	)
+
+	b.WriteString(buttons)
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("↑↓ navigate • N new hook • E edit • D delete • Esc cancel"))
+
+	// Center the modal
+	content := modalStyle.Width(70).Render(b.String())
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		content,
+	)
+}
+
+func (m Model) renderHookEditModal() string {
+	var b strings.Builder
+
+	title := "Edit Hook"
+	if !m.hookEditMode {
+		title = "New Hook"
+	}
+
+	b.WriteString(modalTitleStyle.Render(title))
+	b.WriteString("\n\n")
+
+	// Hook type indicator
+	hookTypeNames := []string{"Pre-Create", "Post-Create", "Pre-Delete", "Post-Delete", "On-Switch"}
+	b.WriteString(helpStyle.Render("Hook Type: "))
+	b.WriteString(normalItemStyle.Render(hookTypeNames[m.hooksSelectedHookType]))
+	b.WriteString("\n\n")
+
+	// Name field
+	nameLabel := "Name"
+	nameInput := m.hookNameInput.View()
+	if m.hookEditFocus == 0 {
+		nameLabel = selectedItemStyle.Render("Name")
+	}
+	b.WriteString(fmt.Sprintf("%s: %s\n\n", nameLabel, nameInput))
+
+	// Command field
+	commandLabel := "Command"
+	commandInput := m.hookCommandInput.View()
+	if m.hookEditFocus == 1 {
+		commandLabel = selectedItemStyle.Render("Command")
+	}
+	b.WriteString(fmt.Sprintf("%s: %s\n\n", commandLabel, commandInput))
+
+	// Enabled toggle
+	enabledLabel := "Enabled"
+	enabledCheckbox := "[ ]"
+	if m.hookEnabled {
+		enabledCheckbox = "[✓]"
+	}
+	if m.hookEditFocus == 2 {
+		enabledLabel = selectedItemStyle.Render("Enabled")
+		enabledCheckbox = selectedItemStyle.Render(enabledCheckbox)
+	}
+	b.WriteString(fmt.Sprintf("%s: %s (Enter to toggle)\n\n", enabledLabel, enabledCheckbox))
+
+	// Run Async toggle
+	asyncLabel := "Run Async"
+	asyncCheckbox := "[ ]"
+	if m.hookRunAsync {
+		asyncCheckbox = "[✓]"
+	}
+	if m.hookEditFocus == 3 {
+		asyncLabel = selectedItemStyle.Render("Run Async")
+		asyncCheckbox = selectedItemStyle.Render(asyncCheckbox)
+	}
+	b.WriteString(fmt.Sprintf("%s: %s (Enter to toggle)\n\n", asyncLabel, asyncCheckbox))
+
+	// Status message (error or success from save)
+	if m.hooksModalStatus != "" {
+		if strings.Contains(m.hooksModalStatus, "Failed") || strings.Contains(m.hooksModalStatus, "required") {
+			b.WriteString(errorStyle.Render(m.hooksModalStatus))
+		} else {
+			b.WriteString(statusStyle.Render(m.hooksModalStatus))
+		}
+		b.WriteString("\n\n")
+	}
+
+	// Buttons
+	saveStyle := buttonStyle
+	cancelStyle := cancelButtonStyle
+
+	if m.hookEditFocus == 4 {
+		saveStyle = selectedButtonStyle
+	} else if m.hookEditFocus == 5 {
+		cancelStyle = selectedCancelButtonStyle
+	}
+
+	buttons := fmt.Sprintf("%s  %s",
+		saveStyle.Render("[S]ave"),
+		cancelStyle.Render("[Esc] Cancel"),
+	)
+
+	b.WriteString(buttons)
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("Tab/↑↓ navigate • Enter toggle/save • Esc cancel"))
+
+	// Center the modal
+	content := modalStyle.Width(60).Render(b.String())
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		content,
+	)
+}
+
+// Helper functions for hooks modal
+func pluralize(count int) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

@@ -152,8 +152,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.worktrees[msg.index].AheadCount = msg.aheadCount
 			m.worktrees[msg.index].BehindCount = msg.behindCount
 			m.worktrees[msg.index].IsOutdated = msg.behindCount > 0
+			m.worktrees[msg.index].AIWaiting = msg.aiWaiting
+			m.worktrees[msg.index].Ports = msg.ports
 		}
 		return m, nil
+
+	case beadsInitializedMsg:
+		// Handle beads initialization result (non-blocking)
+		if msg.err != nil {
+			m.debugLog(fmt.Sprintf("Beads initialization failed: %v", msg.err))
+			cmd = m.showWarningNotification("Beads initialization failed (continuing without beads)")
+		} else {
+			m.debugLog("Beads initialized successfully")
+		}
+		return m, cmd
 
 	case onboardingStatusMsg:
 		// If user needs onboarding and we haven't shown it yet, show the modal
@@ -1356,6 +1368,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Worktree is now ensured to exist, proceed with switch
 		if m.pendingSwitchInfo != nil {
+			// Execute on-switch hooks before switching (non-blocking)
+			m.gitManager.ExecuteOnSwitchHooks(m.pendingSwitchInfo.Path, m.pendingSwitchInfo.Branch)
+
 			m.switchInfo = *m.pendingSwitchInfo
 			m.pendingSwitchInfo = nil
 			return m, tea.Quit
@@ -1971,6 +1986,12 @@ func (m Model) handleModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case aiProviderEditModal:
 		return m.handleAIProviderEditModalInput(msg)
+
+	case hooksModal:
+		return m.handleHooksModalInput(msg)
+
+	case hookEditModal:
+		return m.handleHookEditModalInput(msg)
 
 	case helperModal:
 		return m.handleHelperModalInput(msg)
@@ -3167,7 +3188,7 @@ func (m Model) handleSettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down":
-		if m.settingsIndex < 6 { // Now 7 settings (editor, theme, base branch, tmux config, AI integration, debug logs, PR default state)
+		if m.settingsIndex < 7 { // Now 8 settings (editor, theme, base branch, tmux config, AI integration, debug logs, PR default state, hooks)
 			m.settingsIndex++
 		}
 
@@ -3210,6 +3231,12 @@ func (m Model) handleSettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		// Quick key for PR Default State
 		m.settingsIndex = 6
+		msg = tea.KeyMsg{Type: tea.KeyEnter}
+		return m.handleSettingsModalInput(msg)
+
+	case "o":
+		// Quick key for Hooks
+		m.settingsIndex = 7
 		msg = tea.KeyMsg{Type: tea.KeyEnter}
 		return m.handleSettingsModalInput(msg)
 
@@ -3312,6 +3339,13 @@ func (m Model) handleSettingsModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.prStateSettingsCursor = 1
 				}
 			}
+			return m, nil
+
+		case 7:
+			// Hooks setting - open hooks management modal
+			m.modal = hooksModal
+			m.hooksSelectedHookType = 0
+			m.hooksSelectedHook = 0
 			return m, nil
 		}
 	}
@@ -3767,6 +3801,303 @@ func (m Model) handleHelperModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) handleHooksModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		// Return to settings modal
+		m.modal = settingsModal
+		m.settingsIndex = 7 // Hooks setting
+		return m, nil
+
+	case "up", "k":
+		if m.hooksSelectedHookType > 0 {
+			m.hooksSelectedHookType--
+		}
+		m.hooksSelectedHook = 0 // Reset hook selection when changing type
+		return m, nil
+
+	case "down", "j":
+		if m.hooksSelectedHookType < 4 { // 5 hook types (0-4)
+			m.hooksSelectedHookType++
+		}
+		m.hooksSelectedHook = 0 // Reset hook selection when changing type
+		return m, nil
+
+	case "n":
+		// Create new hook
+		m.modal = hookEditModal
+		m.hookEditMode = false
+		m.hookEditFocus = 0
+		m.hookEnabled = true   // Default to enabled
+		m.hookRunAsync = false // Default to sync
+
+		// Initialize input fields
+		m.hookNameInput = textinput.New()
+		m.hookNameInput.Placeholder = "Hook name (e.g., 'Install dependencies')"
+		m.hookNameInput.Focus()
+		m.hookNameInput.CharLimit = 100
+
+		m.hookCommandInput = textinput.New()
+		m.hookCommandInput.Placeholder = "Command (e.g., 'npm install')"
+		m.hookCommandInput.CharLimit = 500
+
+		m.hookOriginalName = ""
+		m.hookOriginalType = ""
+		m.hooksModalStatus = ""
+		return m, nil
+
+	case "e":
+		// Edit existing hook
+		hooks := m.getHooksForSelectedType()
+		if len(hooks) == 0 {
+			return m, nil
+		}
+
+		selectedHook := hooks[m.hooksSelectedHook]
+		m.modal = hookEditModal
+		m.hookEditMode = true
+		m.hookEditFocus = 0
+		m.hookOriginalName = selectedHook.Name
+		m.hookOriginalType = m.getHookTypeName(m.hooksSelectedHookType)
+
+		// Populate fields from existing hook
+		m.hookNameInput = textinput.New()
+		m.hookNameInput.SetValue(selectedHook.Name)
+		m.hookNameInput.Focus()
+		m.hookNameInput.CharLimit = 100
+
+		m.hookCommandInput = textinput.New()
+		m.hookCommandInput.SetValue(selectedHook.Command)
+		m.hookCommandInput.CharLimit = 500
+
+		m.hookEnabled = selectedHook.Enabled
+		m.hookRunAsync = selectedHook.RunAsync
+		m.hooksModalStatus = ""
+		return m, nil
+
+	case "d":
+		// Delete hook
+		hooks := m.getHooksForSelectedType()
+		if len(hooks) == 0 {
+			return m, nil
+		}
+
+		selectedHook := hooks[m.hooksSelectedHook]
+		if m.configManager != nil {
+			hookType := m.getHookTypeName(m.hooksSelectedHookType)
+			if err := m.configManager.RemoveHook(m.repoPath, hookType, m.hooksSelectedHook); err != nil {
+				cmd := m.showErrorNotification(fmt.Sprintf("Failed to delete hook: %v", err), 3*time.Second)
+				return m, cmd
+			}
+
+			// Adjust cursor if needed
+			if m.hooksSelectedHook >= len(m.getHooksForSelectedType())-1 {
+				m.hooksSelectedHook = len(m.getHooksForSelectedType()) - 1
+				if m.hooksSelectedHook < 0 {
+					m.hooksSelectedHook = 0
+				}
+			}
+
+			cmd := m.showSuccessNotification(fmt.Sprintf("Deleted hook: %s", selectedHook.Name), 2*time.Second)
+			return m, cmd
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m Model) handleHookEditModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		// Cancel and return to hooks modal
+		m.modal = hooksModal
+		m.hookNameInput.Blur()
+		m.hookCommandInput.Blur()
+		return m, nil
+
+	case "tab":
+		// Cycle through fields: name (0) -> command (1) -> enabled (2) -> run_async (3) -> save (4) -> cancel (5) -> back to name
+		m.hookEditFocus = (m.hookEditFocus + 1) % 6
+		if m.hookEditFocus == 0 {
+			m.hookNameInput.Focus()
+			m.hookCommandInput.Blur()
+		} else if m.hookEditFocus == 1 {
+			m.hookNameInput.Blur()
+			m.hookCommandInput.Focus()
+		} else {
+			m.hookNameInput.Blur()
+			m.hookCommandInput.Blur()
+		}
+		return m, nil
+
+	case "up":
+		// Navigate backwards through fields
+		if m.hookEditFocus > 0 {
+			m.hookEditFocus--
+			if m.hookEditFocus == 0 {
+				m.hookNameInput.Focus()
+				m.hookCommandInput.Blur()
+			} else if m.hookEditFocus == 1 {
+				m.hookNameInput.Blur()
+				m.hookCommandInput.Focus()
+			} else {
+				m.hookNameInput.Blur()
+				m.hookCommandInput.Blur()
+			}
+		}
+		return m, nil
+
+	case "down":
+		// Navigate forwards through fields
+		if m.hookEditFocus < 5 {
+			m.hookEditFocus++
+			if m.hookEditFocus == 0 {
+				m.hookNameInput.Focus()
+				m.hookCommandInput.Blur()
+			} else if m.hookEditFocus == 1 {
+				m.hookNameInput.Blur()
+				m.hookCommandInput.Focus()
+			} else {
+				m.hookNameInput.Blur()
+				m.hookCommandInput.Blur()
+			}
+		}
+		return m, nil
+
+	case "enter":
+		if m.hookEditFocus == 4 {
+			// Save button
+			name := strings.TrimSpace(m.hookNameInput.Value())
+			command := strings.TrimSpace(m.hookCommandInput.Value())
+
+			// Validate
+			if name == "" {
+				m.hooksModalStatus = "Hook name is required"
+				m.hooksModalStatusTime = time.Now()
+				return m, nil
+			}
+			if command == "" {
+				m.hooksModalStatus = "Hook command is required"
+				m.hooksModalStatusTime = time.Now()
+				return m, nil
+			}
+
+			if m.configManager != nil {
+				hookType := m.getHookTypeName(m.hooksSelectedHookType)
+				newHook := config.Hook{
+					Name:     name,
+					Command:  command,
+					Enabled:  m.hookEnabled,
+					RunAsync: m.hookRunAsync,
+				}
+
+				var err error
+				if m.hookEditMode {
+					// Update existing hook
+					err = m.configManager.UpdateHook(m.repoPath, hookType, m.hooksSelectedHook, newHook)
+				} else {
+					// Add new hook
+					err = m.configManager.AddHook(m.repoPath, hookType, newHook)
+				}
+
+				if err != nil {
+					m.hooksModalStatus = fmt.Sprintf("Failed to save hook: %v", err)
+					m.hooksModalStatusTime = time.Now()
+					return m, nil
+				}
+
+				// Return to hooks modal
+				m.modal = hooksModal
+				m.hookNameInput.Blur()
+				m.hookCommandInput.Blur()
+
+				action := "added"
+				if m.hookEditMode {
+					action = "updated"
+				}
+				cmd := m.showSuccessNotification(fmt.Sprintf("Hook %s: %s", action, name), 2*time.Second)
+				return m, cmd
+			}
+		} else if m.hookEditFocus == 5 {
+			// Cancel button
+			m.modal = hooksModal
+			m.hookNameInput.Blur()
+			m.hookCommandInput.Blur()
+			return m, nil
+		} else if m.hookEditFocus == 2 {
+			// Toggle enabled
+			m.hookEnabled = !m.hookEnabled
+			return m, nil
+		} else if m.hookEditFocus == 3 {
+			// Toggle run_async
+			m.hookRunAsync = !m.hookRunAsync
+			return m, nil
+		} else {
+			// Move to next field
+			m.hookEditFocus = (m.hookEditFocus + 1) % 6
+			if m.hookEditFocus == 0 {
+				m.hookNameInput.Focus()
+				m.hookCommandInput.Blur()
+			} else if m.hookEditFocus == 1 {
+				m.hookNameInput.Blur()
+				m.hookCommandInput.Focus()
+			} else {
+				m.hookNameInput.Blur()
+				m.hookCommandInput.Blur()
+			}
+			return m, nil
+		}
+
+	default:
+		// Pass keystrokes to input fields
+		var cmd tea.Cmd
+		if m.hookEditFocus == 0 {
+			m.hookNameInput, cmd = m.hookNameInput.Update(msg)
+		} else if m.hookEditFocus == 1 {
+			m.hookCommandInput, cmd = m.hookCommandInput.Update(msg)
+		}
+		return m, cmd
+	}
+
+	return m, nil
+}
+
+// Helper functions for hooks modal
+func (m Model) getHookTypeName(index int) string {
+	hookTypes := []string{"pre_create", "post_create", "pre_delete", "post_delete", "on_switch"}
+	if index >= 0 && index < len(hookTypes) {
+		return hookTypes[index]
+	}
+	return "pre_create"
+}
+
+func (m Model) getHooksForSelectedType() []config.Hook {
+	if m.configManager == nil {
+		return []config.Hook{}
+	}
+
+	hooksConfig := m.configManager.GetHooks(m.repoPath)
+	if hooksConfig == nil {
+		return []config.Hook{}
+	}
+
+	switch m.hooksSelectedHookType {
+	case 0:
+		return hooksConfig.PreCreate
+	case 1:
+		return hooksConfig.PostCreate
+	case 2:
+		return hooksConfig.PreDelete
+	case 3:
+		return hooksConfig.PostDelete
+	case 4:
+		return hooksConfig.OnSwitch
+	default:
+		return []config.Hook{}
+	}
 }
 
 func (m Model) handleAIProviderListModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

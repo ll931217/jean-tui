@@ -11,12 +11,14 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/coollabsio/jean-tui/beads"
 	"github.com/coollabsio/jean-tui/config"
 	"github.com/coollabsio/jean-tui/git"
 	"github.com/coollabsio/jean-tui/github"
 	"github.com/coollabsio/jean-tui/internal/version"
 	"github.com/coollabsio/jean-tui/openai"
 	"github.com/coollabsio/jean-tui/session"
+	"github.com/coollabsio/jean-tui/util"
 )
 
 // SwitchInfo contains information about the worktree to switch to
@@ -60,6 +62,8 @@ const (
 	gitInitModal
 	aiProviderListModal
 	aiProviderEditModal
+	hooksModal
+	hookEditModal
 )
 
 // NotificationType defines the type of notification
@@ -87,6 +91,7 @@ type Model struct {
 	sessionManager *session.Manager
 	configManager  *config.Manager
 	githubManager  *github.Manager
+	beadsManager   *beads.Manager
 	worktrees      []git.Worktree
 	branches       []string
 	sessions       []session.Session
@@ -248,6 +253,20 @@ type Model struct {
 	prRetryDescription  string // Generated description for PR retry
 	prRetryInProgress   bool   // Whether we're already in a retry attempt (prevent infinite loops)
 
+	// Hooks modal state
+	hooksSelectedHookType int                    // Selected hook type index (0=pre_create, 1=post_create, 2=pre_delete, 3=post_delete, 4=on_switch)
+	hooksSelectedHook     int                    // Selected hook index within the hook type list
+	hookNameInput         textinput.Model        // Hook name input field
+	hookCommandInput      textinput.Model        // Hook command input field
+	hookEnabled           bool                   // Whether hook is enabled
+	hookRunAsync          bool                   // Whether hook runs asynchronously
+	hookEditMode          bool                   // true=edit existing, false=create new
+	hookEditFocus         int                    // Which field is focused (0=name, 1=command, 2=enabled, 3=run_async, 4=save, 5=cancel)
+	hookOriginalName      string                 // Original hook name (for rename detection)
+	hookOriginalType      string                 // Original hook type (for type change detection)
+	hooksModalStatus      string                 // Status message for hooks modal (error/success)
+	hooksModalStatusTime  time.Time              // When the status was set
+
 	// Worktree switch state (for ensuring worktree exists before switching)
 	pendingSwitchInfo *SwitchInfo // Info for pending switch (will be completed after ensure succeeds)
 	ensuringWorktree  bool        // Whether we're currently ensuring a worktree exists
@@ -330,11 +349,23 @@ func NewModel(repoPath string, autoClaude bool) Model {
 	aiPromptPRInput.SetWidth(100)
 	aiPromptPRInput.SetHeight(5)
 
+	// Initialize hooks text inputs
+	hookNameInput := textinput.New()
+	hookNameInput.Placeholder = "Hook name (e.g., 'Install dependencies')"
+	hookNameInput.CharLimit = 100
+	hookNameInput.Width = 50
+
+	hookCommandInput := textinput.New()
+	hookCommandInput.Placeholder = "Command (e.g., 'npm install')"
+	hookCommandInput.CharLimit = 500
+	hookCommandInput.Width = 70
+
 	// Initialize config manager (ignore errors, will use defaults)
 	configManager, _ := config.NewManager()
 
 	// Create git manager and get absolute repo root path
 	gitManager := git.NewManager(repoPath)
+	gitManager.SetConfigManager(configManager) // Enable hooks support
 	absoluteRepoPath := repoPath
 	if root, err := gitManager.GetRepoRoot(); err == nil {
 		absoluteRepoPath = root
@@ -372,6 +403,7 @@ func NewModel(repoPath string, autoClaude bool) Model {
 		sessionManager:     session.NewManager(),
 		configManager:      configManager,
 		githubManager:      github.NewManager(),
+		beadsManager:       beads.NewManager(absoluteRepoPath),
 		nameInput:          nameInput,
 		pathInput:          pathInput,
 		searchInput:        searchInput,
@@ -384,7 +416,9 @@ func NewModel(repoPath string, autoClaude bool) Model {
 		aiPromptCommitInput: aiPromptCommitInput,
 		aiPromptBranchInput: aiPromptBranchInput,
 		aiPromptPRInput:     aiPromptPRInput,
-		aiModels:           aiModels,
+		hookNameInput:       hookNameInput,
+		hookCommandInput:    hookCommandInput,
+		aiModels:            aiModels,
 		autoClaude:         autoClaude,
 		repoPath:           absoluteRepoPath,
 		editors:            editors,
@@ -434,6 +468,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.loadBaseBranch(),
 		m.loadSessions(),
+		m.initializeBeads(), // Auto-initialize beads
 		m.scheduleActivityCheck(),
 		m.checkForUpdates(),
 		tea.EnterAltScreen,
@@ -488,11 +523,13 @@ type (
 	}
 
 	worktreeStatusUpdatedMsg struct {
-		index    int  // Index of worktree in list
+		index         int   // Index of worktree in list
 		hasUncommitted bool
-		aheadCount int
-		behindCount int
-		err      error
+		aheadCount    int
+		behindCount   int
+		aiWaiting     bool  // Whether Claude is waiting for input
+		ports         []int // Active ports parsed from config files
+		err           error
 	}
 
 	branchRenamedMsg struct {
@@ -516,6 +553,10 @@ type (
 	}
 
 	clearErrorMsg struct{}
+
+	beadsInitializedMsg struct {
+		err error
+	}
 
 	statusMsg string
 
@@ -700,6 +741,21 @@ func (m Model) loadWorktrees() tea.Cmd {
 		for i := range worktrees {
 			worktrees[i].ClaudeSessionName = m.sessionManager.SanitizeName(repoName, worktrees[i].Branch)
 		}
+
+		// Load beads data for each worktree
+		hasBeads := m.beadsManager != nil && m.beadsManager.IsInitialized()
+		if hasBeads {
+			for i := range worktrees {
+				// Only load beads data for workspace worktrees (not the main repo)
+				if !worktrees[i].IsCurrent {
+					summary, _ := m.beadsManager.GetIssueSummary(worktrees[i].Branch)
+					worktrees[i].OpenIssues = summary.OpenCount
+					worktrees[i].ClosedIssues = summary.ClosedCount
+					worktrees[i].HasBeads = summary.TotalCount > 0
+				}
+			}
+		}
+
 		return worktreesLoadedMsg{worktrees: worktrees, err: err}
 	}
 }
@@ -716,7 +772,7 @@ func (m Model) loadWorktreesLightweight() tea.Cmd {
 	}
 }
 
-// loadWorktreeStatus loads status (uncommitted changes, ahead/behind counts) for a single worktree
+// loadWorktreeStatus loads status (uncommitted changes, ahead/behind counts, AI status, ports) for a single worktree
 // This is called asynchronously after the initial lightweight load
 func (m Model) loadWorktreeStatus(index int, worktree git.Worktree) tea.Cmd {
 	return func() tea.Msg {
@@ -736,11 +792,27 @@ func (m Model) loadWorktreeStatus(index int, worktree git.Worktree) tea.Cmd {
 			}
 		}
 
+		// Detect AI session status (non-blocking, failures are silent)
+		aiWaiting := false
+		if worktree.ClaudeSessionName != "" {
+			aiDetector := session.NewAIStatusDetector()
+			aiWaiting = aiDetector.DetectAISessionState(worktree.ClaudeSessionName)
+		}
+
+		// Parse ports from config files (non-blocking, failures are silent)
+		ports := []int{}
+		portParser := util.NewPortParser(worktree.Path)
+		if parsedPorts := portParser.ParsePorts(); len(parsedPorts) > 0 {
+			ports = parsedPorts
+		}
+
 		return worktreeStatusUpdatedMsg{
 			index:          index,
 			hasUncommitted: hasUncommitted,
 			aheadCount:     aheadCount,
 			behindCount:    behindCount,
+			aiWaiting:      aiWaiting,
+			ports:          ports,
 			err:            nil,
 		}
 	}
@@ -965,6 +1037,32 @@ func (m Model) loadBaseBranch() tea.Cmd {
 			return baseBranchLoadedMsg{branch: defaultBranch}
 		}
 		return baseBranchLoadedMsg{branch: branch}
+	}
+}
+
+// initializeBeads initializes beads if not already initialized
+func (m Model) initializeBeads() tea.Cmd {
+	return func() tea.Msg {
+		if m.beadsManager == nil {
+			return beadsInitializedMsg{err: fmt.Errorf("beads manager not initialized")}
+		}
+
+		// Check if beads is already initialized
+		if m.beadsManager.IsInitialized() {
+			m.debugLog("beads already initialized, skipping")
+			return beadsInitializedMsg{err: nil}
+		}
+
+		// Initialize beads
+		m.debugLog("initializing beads...")
+		err := m.beadsManager.Initialize()
+		if err != nil {
+			m.debugLog(fmt.Sprintf("beads initialization failed: %v", err))
+			return beadsInitializedMsg{err: fmt.Errorf("bd init failed: %w", err)}
+		}
+
+		m.debugLog("beads initialized successfully")
+		return beadsInitializedMsg{err: nil}
 	}
 }
 

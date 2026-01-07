@@ -66,6 +66,24 @@ type RepoConfig struct {
 	PRs                map[string][]PRInfo      `json:"prs,omitempty"`                // branch -> list of PRs
 	InitializedClaudes map[string]bool        `json:"initialized_claudes,omitempty"` // branch -> whether Claude has been started
 	AIProvider         *AIProviderConfig       `json:"ai_provider,omitempty"`       // AI provider profiles and settings
+	Hooks              *HooksConfig            `json:"hooks,omitempty"`              // Hooks configuration
+}
+
+// Hook represents a single hook configuration (duplicated from hooks package for JSON serialization)
+type Hook struct {
+	Name     string `json:"name"`
+	Command  string `json:"command"`
+	Enabled  bool   `json:"enabled"`
+	RunAsync bool   `json:"run_async"`
+}
+
+// HooksConfig holds all hook configurations organized by hook type
+type HooksConfig struct {
+	PreCreate  []Hook `json:"pre_create,omitempty"`  // Hooks before worktree creation
+	PostCreate []Hook `json:"post_create,omitempty"` // Hooks after successful worktree creation
+	PreDelete  []Hook `json:"pre_delete,omitempty"`  // Hooks before worktree deletion
+	PostDelete []Hook `json:"post_delete,omitempty"` // Hooks after successful worktree deletion
+	OnSwitch   []Hook `json:"on_switch,omitempty"`   // Hooks when switching worktrees
 }
 
 // Manager handles configuration loading and saving
@@ -757,5 +775,140 @@ func (m *Manager) SetPRDefaultState(repoPath, state string) error {
 	}
 
 	m.config.Repositories[repoPath].PRDefaultState = state
+	return m.save()
+}
+
+// GetHooks returns the hooks configuration for a repository
+func (m *Manager) GetHooks(repoPath string) *HooksConfig {
+	if repo, ok := m.config.Repositories[repoPath]; ok {
+		return repo.Hooks
+	}
+	return nil
+}
+
+// SetHooks sets the entire hooks configuration for a repository
+func (m *Manager) SetHooks(repoPath string, hooks *HooksConfig) error {
+	if m.config.Repositories == nil {
+		m.config.Repositories = make(map[string]*RepoConfig)
+	}
+
+	if _, ok := m.config.Repositories[repoPath]; !ok {
+		m.config.Repositories[repoPath] = &RepoConfig{}
+	}
+
+	m.config.Repositories[repoPath].Hooks = hooks
+	return m.save()
+}
+
+// AddHook adds a hook to a specific hook type for a repository
+func (m *Manager) AddHook(repoPath, hookType string, hook Hook) error {
+	if m.config.Repositories == nil {
+		m.config.Repositories = make(map[string]*RepoConfig)
+	}
+
+	if _, ok := m.config.Repositories[repoPath]; !ok {
+		m.config.Repositories[repoPath] = &RepoConfig{}
+	}
+
+	repo := m.config.Repositories[repoPath]
+	if repo.Hooks == nil {
+		repo.Hooks = &HooksConfig{}
+	}
+
+	switch hookType {
+	case "pre_create":
+		repo.Hooks.PreCreate = append(repo.Hooks.PreCreate, hook)
+	case "post_create":
+		repo.Hooks.PostCreate = append(repo.Hooks.PostCreate, hook)
+	case "pre_delete":
+		repo.Hooks.PreDelete = append(repo.Hooks.PreDelete, hook)
+	case "post_delete":
+		repo.Hooks.PostDelete = append(repo.Hooks.PostDelete, hook)
+	case "on_switch":
+		repo.Hooks.OnSwitch = append(repo.Hooks.OnSwitch, hook)
+	default:
+		return fmt.Errorf("invalid hook type: %s", hookType)
+	}
+
+	return m.save()
+}
+
+// RemoveHook removes a hook from a specific hook type by index
+func (m *Manager) RemoveHook(repoPath, hookType string, index int) error {
+	repo, ok := m.config.Repositories[repoPath]
+	if !ok || repo.Hooks == nil {
+		return fmt.Errorf("no hooks configured for repository")
+	}
+
+	switch hookType {
+	case "pre_create":
+		if index < 0 || index >= len(repo.Hooks.PreCreate) {
+			return fmt.Errorf("invalid hook index")
+		}
+		repo.Hooks.PreCreate = append(repo.Hooks.PreCreate[:index], repo.Hooks.PreCreate[index+1:]...)
+	case "post_create":
+		if index < 0 || index >= len(repo.Hooks.PostCreate) {
+			return fmt.Errorf("invalid hook index")
+		}
+		repo.Hooks.PostCreate = append(repo.Hooks.PostCreate[:index], repo.Hooks.PostCreate[index+1:]...)
+	case "pre_delete":
+		if index < 0 || index >= len(repo.Hooks.PreDelete) {
+			return fmt.Errorf("invalid hook index")
+		}
+		repo.Hooks.PreDelete = append(repo.Hooks.PreDelete[:index], repo.Hooks.PreDelete[index+1:]...)
+	case "post_delete":
+		if index < 0 || index >= len(repo.Hooks.PostDelete) {
+			return fmt.Errorf("invalid hook index")
+		}
+		repo.Hooks.PostDelete = append(repo.Hooks.PostDelete[:index], repo.Hooks.PostDelete[index+1:]...)
+	case "on_switch":
+		if index < 0 || index >= len(repo.Hooks.OnSwitch) {
+			return fmt.Errorf("invalid hook index")
+		}
+		repo.Hooks.OnSwitch = append(repo.Hooks.OnSwitch[:index], repo.Hooks.OnSwitch[index+1:]...)
+	default:
+		return fmt.Errorf("invalid hook type: %s", hookType)
+	}
+
+	return m.save()
+}
+
+// UpdateHook updates a hook at a specific index for a hook type
+func (m *Manager) UpdateHook(repoPath, hookType string, index int, hook Hook) error {
+	repo, ok := m.config.Repositories[repoPath]
+	if !ok || repo.Hooks == nil {
+		return fmt.Errorf("no hooks configured for repository")
+	}
+
+	switch hookType {
+	case "pre_create":
+		if index < 0 || index >= len(repo.Hooks.PreCreate) {
+			return fmt.Errorf("invalid hook index")
+		}
+		repo.Hooks.PreCreate[index] = hook
+	case "post_create":
+		if index < 0 || index >= len(repo.Hooks.PostCreate) {
+			return fmt.Errorf("invalid hook index")
+		}
+		repo.Hooks.PostCreate[index] = hook
+	case "pre_delete":
+		if index < 0 || index >= len(repo.Hooks.PreDelete) {
+			return fmt.Errorf("invalid hook index")
+		}
+		repo.Hooks.PreDelete[index] = hook
+	case "post_delete":
+		if index < 0 || index >= len(repo.Hooks.PostDelete) {
+			return fmt.Errorf("invalid hook index")
+		}
+		repo.Hooks.PostDelete[index] = hook
+	case "on_switch":
+		if index < 0 || index >= len(repo.Hooks.OnSwitch) {
+			return fmt.Errorf("invalid hook index")
+		}
+		repo.Hooks.OnSwitch[index] = hook
+	default:
+		return fmt.Errorf("invalid hook type: %s", hookType)
+	}
+
 	return m.save()
 }
