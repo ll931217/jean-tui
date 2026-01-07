@@ -64,6 +64,8 @@ const (
 	aiProviderEditModal
 	hooksModal
 	hookEditModal
+	configScopeSelectModal
+	configEditorModal
 )
 
 // NotificationType defines the type of notification
@@ -279,6 +281,14 @@ type Model struct {
 
 	// Git init modal state
 	gitInitError string // Error message for git initialization
+
+	// Config editor state
+	configScopeOptions   []config.ConfigScope // Available config scopes (global, repo)
+	configScopeIndex     int                  // Selected config scope index
+	configEditorScope    config.ConfigScope   // Currently selected scope for editing
+	configEditorPath     string               // Path to config file being edited
+	configEditorInProgress bool               // Whether config editor is currently running
+	configEditorStatus   string               // Status message for config editor (error/success)
 }
 
 // NewModel creates a new TUI model
@@ -425,6 +435,8 @@ func NewModel(repoPath string, autoClaude bool) Model {
 		availableThemes:    GetAvailableThemes(),
 		prStateSettingsCursor: 1, // Default to "Ready for review" (index 1)
 		isInitializing: true,
+		configScopeOptions: config.DetectAvailableScopes(absoluteRepoPath),
+		configEditorScope:    config.ScopeGlobal,
 	}
 
 	// Load AI settings from config
@@ -1093,6 +1105,100 @@ func (m Model) openInEditor(path string) tea.Cmd {
 			return editorOpenedMsg{err: fmt.Errorf("failed to open %s: %w. Press 'e' to select a different editor", editor, err)}
 		}
 		return editorOpenedMsg{err: nil}
+	}
+}
+
+// editConfig launches the external config editor and blocks until it closes
+func (m Model) editConfig(scope config.ConfigScope) tea.Cmd {
+	return func() tea.Msg {
+		// Get config path for scope
+		configPath, err := config.GetConfigPathForScope(scope)
+		if err != nil {
+			return configEditCompletedMsg{
+				success: false,
+				err:     fmt.Errorf("failed to get config path: %w", err),
+			}
+		}
+
+		// Create config editor
+		editor, err := config.NewConfigEditor(configPath)
+		if err != nil {
+			return configEditCompletedMsg{
+				success: false,
+				err:     fmt.Errorf("failed to create config editor: %w", err),
+			}
+		}
+
+		// Create backup before editing
+		if err := editor.CreateBackup(); err != nil {
+			return configEditCompletedMsg{
+				success: false,
+				err:     fmt.Errorf("failed to create backup: %w", err),
+			}
+		}
+
+		// Create temp copy for editing
+		if err := editor.CreateTempCopy(); err != nil {
+			return configEditCompletedMsg{
+				success: false,
+				err:     fmt.Errorf("failed to create temp copy: %w", err),
+			}
+		}
+
+		// Launch external editor (blocks until editor closes)
+		if err := editor.LaunchEdit(); err != nil {
+			return configEditCompletedMsg{
+				success: false,
+				err:     fmt.Errorf("editor launch failed: %w", err),
+			}
+		}
+
+		// Validate JSON
+		validationErr := editor.ValidateJSON()
+		if validationErr != nil {
+			// Restore from backup on validation failure
+			editor.RestoreFromBackup()
+			return configEditCompletedMsg{
+				success:         false,
+				validationError: validationErr,
+			}
+		}
+
+		// Replace original with edited temp file
+		if err := editor.ReplaceOriginal(); err != nil {
+			return configEditCompletedMsg{
+				success: false,
+				err:     fmt.Errorf("failed to apply changes: %w", err),
+			}
+		}
+
+		return configEditCompletedMsg{
+			success: true,
+		}
+	}
+}
+
+// reloadConfig reloads the configuration from disk
+func (m Model) reloadConfig() tea.Cmd {
+	return func() tea.Msg {
+		if m.configManager == nil {
+			return configReloadedMsg{
+				success: false,
+				err:     fmt.Errorf("config manager not initialized"),
+			}
+		}
+
+		// Reload the config
+		if err := m.configManager.Reload(); err != nil {
+			return configReloadedMsg{
+				success: false,
+				err:     fmt.Errorf("failed to reload config: %w", err),
+			}
+		}
+
+		return configReloadedMsg{
+			success: true,
+		}
 	}
 }
 
@@ -2516,4 +2622,17 @@ func (m Model) checkOnboardingStatus() tea.Cmd {
 // Message type for tmux config installation from onboarding
 type tmuxConfigInstalledMsg struct {
 	err error
+}
+
+// Message type for config editor completion
+type configEditCompletedMsg struct {
+	success         bool
+	validationError *config.ValidationError
+	err             error
+}
+
+// Message type for config reload
+type configReloadedMsg struct {
+	success bool
+	err     error
 }

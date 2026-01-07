@@ -1643,6 +1643,14 @@ func (m Model) handleMainInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sessionIndex = 0
 		return m, m.loadSessions()
 
+	case "E":
+		// Open config editor (Shift+E)
+		// Show scope selection modal first
+		m.modal = configScopeSelectModal
+		m.modalFocused = 0
+		m.configScopeIndex = 0
+		return m, nil
+
 	case "u":
 		// Update from base branch (pull/merge base branch changes)
 		if wt := m.selectedWorktree(); wt != nil {
@@ -1992,6 +2000,12 @@ func (m Model) handleModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case hookEditModal:
 		return m.handleHookEditModalInput(msg)
+
+	case configScopeSelectModal:
+		return m.handleConfigScopeSelectModalInput(msg)
+
+	case configEditorModal:
+		return m.handleConfigEditorModalInput(msg)
 
 	case helperModal:
 		return m.handleHelperModalInput(msg)
@@ -4595,3 +4609,71 @@ func (m Model) saveProviderProfile() (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+
+// handleConfigScopeSelectModalInput handles input for the config scope selection modal
+func (m Model) handleConfigScopeSelectModalInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		// Close modal
+		m.modal = noModal
+		return m, nil
+
+	case "enter":
+		// Launch config editor with selected scope
+		if m.configScopeIndex < len(m.configScopeOptions) {
+			selectedScope := m.configScopeOptions[m.configScopeIndex]
+			m.configEditorScope = selectedScope
+			m.modal = configEditorModal
+			m.configEditorInProgress = true
+			return m, m.editConfig(selectedScope)
+		}
+		return m, nil
+
+	case "up", "k":
+		if m.configScopeIndex > 0 {
+			m.configScopeIndex--
+		}
+		return m, nil
+
+	case "down", "j":
+		if m.configScopeIndex < len(m.configScopeOptions)-1 {
+			m.configScopeIndex++
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// handleConfigEditorModalInput handles input for the config editor modal (editor is running)
+func (m Model) handleConfigEditorModalInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case configEditCompletedMsg:
+		m.configEditorInProgress = false
+		
+		if !msg.success {
+			// Handle error
+			if msg.validationError != nil {
+				// Show validation error with details
+				errMsg := fmt.Sprintf("Invalid JSON: %s", msg.validationError.Error())
+				return m, m.showErrorNotification(errMsg, 5*time.Second)
+			}
+			if msg.err != nil {
+				return m, m.showErrorNotification(fmt.Sprintf("Config edit failed: %v", msg.err), 4*time.Second)
+			}
+		}
+
+		// Success - reload config and show success notification
+		m.modal = noModal
+		return m, tea.Batch(
+			m.reloadConfig(),
+			m.showSuccessNotification("Configuration reloaded successfully", 3*time.Second),
+		)
+
+	case tea.KeyMsg:
+		// Ignore keyboard input while editor is running
+		return m, nil
+	}
+
+	return m, nil
+}
